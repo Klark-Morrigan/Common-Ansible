@@ -18,7 +18,8 @@ single committable act with its reason, tests, and a diagram.
 - [Section 7 - bats role](#section-7---bats-role)
 - [Section 8 - docker role](#section-8---docker-role)
 - [Section 9 - Config schema, wire the runner VM, verify green](#section-9---config-schema-wire-the-runner-vm-verify-green)
-- [Section 10 - Ordered cross-repo merge](#section-10---ordered-cross-repo-merge)
+- [Section 10 - Decouple Common-Ansible from the provisioner](#section-10---decouple-common-ansible-from-the-provisioner)
+- [Section 11 - Ordered cross-repo merge](#section-11---ordered-cross-repo-merge)
 
 ## Conventions
 
@@ -877,7 +878,175 @@ flowchart LR
   VM --> CD[ci-dotnet green]
 ```
 
-## Section 10 - Ordered cross-repo merge
+## Section 10 - Decouple Common-Ansible from the provisioner
+
+Severs the residual substrate -> Vm-Provisioner coupling described in
+[problem.md](problem.md#the-residual-provisioner-coupling-severed-last): a
+mismodeled menu edge, the implicit inventory shape, and the embedded estate
+topology. Independent of Sections 5-9 (A and B could be pulled earlier);
+grouped here as the substrate-cleanliness finish, before the merge. C-2
+lands code in other repos, so it must precede Section 11.
+
+### Step 10.1 - Decouple the substrate from the provisioner (A / B / C-1 / C-2)
+
+Four committable substeps in increasing depth: drop the false edge, own the
+inventory contract, introduce the transport hook, then relocate the Hyper-V
+implementation behind it. Each is reviewed and committed on its own.
+
+#### Step 10.1.A - Drop the mismodeled menu edge and re-settle the Level
+
+Remove `'Common-Ansible' = @('Infrastructure-Vm-Provisioner')` from
+`.menu/lib/Dependencies/manual-dependencies.psd1`. The substrate has no
+code, build, or operational dependency on the provisioner repo: the
+inventory vault name is consumer-declared (`CA_INVENTORY_VAULT`) and the
+bats stub every vault read. The "provision first" ordering already lives on
+the consumers (Vm-Users / GitHubRunners), which carry both edges. With the
+false edge gone, raise Common-Ansible's `Level` in `.menu/menus.psd1` out of
+the consumer tier into the shared-foundation tier (it no longer ranks below
+Vm-Provisioner).
+
+- **Reason:** A false edge mismodels the dependency gradient and pins the
+  substrate below a repo it does not depend on.
+- **Tests:** `menus.psd1` parses; `Get-ReposInGroup` ordering shows
+  Common-Ansible in the foundation tier; the rebuilt dependency index no
+  longer lists the edge. Menu metadata only - no repo code.
+- **README:** None (workspace-orchestration metadata; no repo README).
+
+```mermaid
+flowchart LR
+  subgraph before
+    P1[Vm-Provisioner] -->|false edge| CA1[Common-Ansible]
+  end
+  subgraph after
+    CA2[Common-Ansible: foundation tier]
+    P2[Vm-Provisioner]
+  end
+```
+
+#### Step 10.1.B - Make the inventory shape a substrate-owned contract
+
+Document the fleet-inventory JSON shape - hosts with
+`vmName`/`ipAddress`/`username`/`password`, plus the optional
+`kind=="router"` row (`externalSwitchName`, optional static `ipAddress`) -
+as Common-Ansible's *input contract*, in the repo README and a contract doc
+under `docs/`. Add a `jq` shape-assertion in
+`ops/virtual-machines/_build-inventory.sh` (and harden the existing
+router-row field check in `_resolve-router.sh`) that fails loud, naming the
+offending record and the missing field, when a provider payload omits a
+required field - so a malformed inventory fails at the substrate boundary
+with a clear message instead of deep inside ansible-playbook.
+
+The `vm_provisioner_config` extra-vars key / `--provisioner-config` flag are
+left as-is: renaming them to a neutral `fleet_inventory` is a contract change
+touching every role and both consumers (and the version bump), out of scope
+here and deferred.
+
+- **Reason:** Turns an implicit, reverse-engineered shape into an explicit
+  substrate-owned contract providers conform to - the inversion that removes
+  the substrate -> provider arrow at the data layer.
+- **Tests:** bats (`Tests/ops`) - `_build-inventory.sh` rejects a record
+  missing `vmName` / `ipAddress` with a named error and accepts a valid
+  fleet; the documented contract fields match the asserted set.
+- **README:** Add an "Inventory contract" section to Common-Ansible's README
+  defining the shape the substrate consumes.
+
+```mermaid
+flowchart LR
+  PROV[Vm-Provisioner output] -->|conforms to| C[(inventory contract)]
+  C -->|asserted by| BI[_build-inventory.sh]
+```
+
+#### Step 10.1.C-1 - Introduce the transport-resolution hook (substrate-only, no move)
+
+Define an explicit hook: `CA_TRANSPORT_RESOLVER` names a script the bridge
+sources to resolve the SSH transport for a NAT/router topology, exporting
+`ROUTER_IP` / `ROUTER_SSH_HOST` / `ROUTER_USERNAME` / `SSHPASS` /
+`ROUTER_PORT`, or doing nothing for a single-switch fleet. Unset selects a
+built-in no-op default (CI, native Linux, direct-routing fleets). Route
+`ops/_run-playbook.sh` through the hook instead of sourcing
+`_resolve-router.sh` directly; `_resolve-router.sh` stays in the substrate
+for now as the default provider the hook points at. No code moves and no
+behaviour changes - this only inverts the dependency: the bridge depends on
+the hook *contract*, not on the estate-specific resolver.
+
+The seam is explicit (a consumer-supplied path), not sibling-discovery, on
+purpose: an implicit seam that located the resolver in a Vm-Provisioner
+checkout would make the substrate name that repo and re-introduce exactly
+the edge 10.1.A removed.
+
+- **Reason:** Establishes the interface so the Hyper-V implementation can
+  leave in C-2 without the substrate ever naming a platform or a repo.
+- **Tests:** bats (`Tests/ops`) - no-router-row fleets stay an unchanged
+  no-op; with `CA_TRANSPORT_RESOLVER` set to a stub that exports `ROUTER_*`,
+  `_build-inventory.sh` emits the ProxyCommand `ansible_ssh_common_args`
+  aimed at the stub's `ROUTER_SSH_HOST`; an unset hook keeps the direct
+  path. E2E runner-lifecycle stays green (the default still resolves
+  Hyper-V).
+- **README:** Document the `CA_TRANSPORT_RESOLVER` hook contract (exported
+  vars, no-op default) in Common-Ansible's README.
+
+```mermaid
+flowchart LR
+  RP[_run-playbook.sh] -->|sources| H{{CA_TRANSPORT_RESOLVER}}
+  H -->|unset| NOOP[no-op default]
+  H -->|set| RES[resolver provider]
+  RES -.default still bundled.-> RR[_resolve-router.sh in substrate]
+```
+
+#### Step 10.1.C-2 - Relocate the Hyper-V implementation behind the hook
+
+Pure move: lift `ops/virtual-machines/_resolve-router.sh` (and its sibling
+`_assert-router-reachable.sh`) out of the substrate to the chosen estate
+home, reusing the platform primitives that already live there -
+`Get-VmKvpIpAddress` (`Infrastructure.HyperV`), netsh portproxy
+(`Infrastructure-Network-Windows`), and the router-row semantics
+(`Infrastructure-Vm-Provisioner`). The consumers (Vm-Users / GitHubRunners)
+point `CA_TRANSPORT_RESOLVER` at the relocated resolver; the substrate drops
+its bundled copy, keeping only the hook contract and the no-op default.
+PowerShell helpers landing alongside Bash in the target repo is accepted.
+
+> **Open decision (settle before this substep runs): the resolver's home.**
+> Recommended single home is `Infrastructure-Vm-Provisioner` - it *creates*
+> the netsh portproxy this resolver *discovers*, so create and discover are
+> colocated, and the consumers already depend on it. A dedicated estate repo
+> is the alternative if even a consumer -> Vm-Provisioner resolver edge is
+> unwanted. Either way this does not re-couple the *substrate*: the hook is
+> consumer-supplied (10.1.C-1), so the substrate still names no repo.
+
+The host file server (`_stage-host-fileserver.sh` +
+`_start`/`_stop-host-file-server.ps1`) is also Windows-specific but is a
+separate, already-parameterized concern; relocating it behind the same
+pattern is a future step, not part of 10.1.
+
+- **Reason:** Removes the last estate-specific code from the substrate; the
+  Hyper-V coupling becomes one provider behind the C-1 hook, so a
+  non-Hyper-V consumer supplies its own resolver (or the no-op) without
+  forking the substrate.
+- **Tests:** The relocated resolver's bats move with it to its new repo and
+  pass there; the substrate's bats cover only the hook + no-op (the
+  estate-specific cases leave with the code); E2E runner-lifecycle is green
+  with the consumers pointing `CA_TRANSPORT_RESOLVER` at the relocated
+  resolver.
+- **README:** The substrate README drops the resolver internals and points
+  at the hook; the target repo's README documents the Hyper-V/ICS resolver
+  it now owns.
+
+```mermaid
+flowchart LR
+  subgraph SUB[Common-Ansible substrate]
+    H{{CA_TRANSPORT_RESOLVER hook}}
+    NOOP[no-op default]
+  end
+  subgraph EST[estate home - TBD]
+    RES[_resolve-router.sh + _assert-router-reachable.sh]
+    PRIM[Get-VmKvpIpAddress / netsh portproxy]
+  end
+  CONS[Vm-Users / GitHubRunners] -->|set CA_TRANSPORT_RESOLVER| H
+  H --> RES
+  RES --> PRIM
+```
+
+## Section 11 - Ordered cross-repo merge
 
 The closing step. Up to here each repo's branch carries its own step
 commits; this is where every repo's PR is finalized and merged in
@@ -885,7 +1054,7 @@ dependency order. Scoped checkout consumes the substrate from a
 Common-Ansible sibling on `master`, so there is no artifact to publish -
 the ordering is what matters.
 
-### Step 10.1 - Finalize and merge each repo PR in dependency order
+### Step 11.1 - Finalize and merge each repo PR in dependency order
 
 Merge Common-Ansible first so the substrate (roles + bridge) is on
 `master`, then the consumers - Infrastructure-Vm-Users,

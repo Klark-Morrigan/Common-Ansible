@@ -185,6 +185,32 @@ bridge consumer-agnostic:
 This decoupling is a prerequisite for steps 2-3 and is sequenced before
 the consumer-specific code moves out.
 
+### The residual provisioner coupling (severed last)
+
+Two couplings survive the vault-name and location decoupling above and are
+cut only after the substrate is otherwise stable, in
+[plan.md Section 10](plan.md#section-10---decouple-common-ansible-from-the-provisioner):
+
+- *Inventory shape.* `_build-inventory.sh` / `_resolve-router.sh` parse a
+  fixed JSON shape (`vmName`/`ipAddress`/`username`/`password`, plus the
+  optional `kind=="router"` row) - an implicit, reverse-engineered
+  dependency on Vm-Provisioner's output. It is made an explicit,
+  substrate-owned *input contract* that providers conform to: dependency
+  inversion, so no substrate -> provider arrow remains at the data layer.
+- *Estate topology.* `_resolve-router.sh` carries Hyper-V KVP IP discovery,
+  WSL netsh-portproxy handling, and ICS/NAT assumptions - the last
+  estate-specific code in the substrate. It moves behind an explicit
+  transport-resolution hook (`CA_TRANSPORT_RESOLVER`): the substrate ships
+  only the hook contract and a no-op default, and the Hyper-V implementation
+  becomes one consumer-supplied provider, so the substrate names no
+  platform. Relocating the implementation does not re-couple the substrate
+  precisely because the hook is consumer-supplied, not substrate-discovered.
+
+Neither is a real menu dependency either: the
+`Common-Ansible -> Infrastructure-Vm-Provisioner` edge in the workspace
+graph is a mismodeled operational-ordering edge (the consumers, not the
+substrate, act on provisioned VMs) and is dropped.
+
 ## The three-section tooling taxonomy
 
 Each tool a VM needs is classified by acquisition strategy. This taxonomy
