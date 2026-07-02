@@ -6,8 +6,9 @@ mechanism - the counterpart to the section-1
 [host-push pattern](../toolchain_host_push/README.md). Where host-push
 caches heavy tarballs on the host and pushes them over the substrate file
 server, section-2 leans on the target's own apt archive for tools small
-enough to pull straight from the distro. It ships with a shellcheck-pinned
-use for the `ci-bash` lint step; see
+enough to pull straight from the distro. It ships with two pinned uses -
+shellcheck for the `ci-bash` lint step and bats for the `ci-bash` test
+step; see
 [the plan](../../docs/dev/implementation/19-common-ansible-extraction-and-toolchain-provisioning/plan.md#step-61---toolchain_apt-role-with-a-shellcheck-pinned-use).
 
 ## Index
@@ -16,7 +17,7 @@ use for the `ci-bash` lint step; see
 - [What it does](#what-it-does)
 - [Why apt, not host-push](#why-apt-not-host-push)
 - [Idempotence](#idempotence)
-- [The shellcheck-pinned use it ships with](#the-shellcheck-pinned-use-it-ships-with)
+- [The pinned uses it ships with](#the-pinned-uses-it-ships-with)
 - [Consuming this role](#consuming-this-role)
 - [Tests](#tests)
 
@@ -79,23 +80,31 @@ throttled by `toolchain_apt_cache_valid_time`: the first run on a fresh VM
 whole role reports `changed: 0` on the second pass. The molecule scenario
 asserts this via `molecule idempotence`.
 
-## The shellcheck-pinned use it ships with
+## The pinned uses it ships with
 
-The role's first and shipped use is shellcheck, pinned to `0.9.0-1` - the
-apt candidate on the target's Ubuntu 24.04 (noble/universe). This unblocks
-the original `ci-bash` shellcheck step in a durable, re-provision-safe way:
-the runner VM carries a known shellcheck version rather than depending on a
-runtime install. The pin is exercised end to end by the molecule scenario
-(install, on PATH, exact version, idempotent re-run).
+The role ships with two pinned uses, both apt candidates on the target's
+Ubuntu 24.04 (noble/universe). Each carries a known version onto the runner
+VM rather than depending on a runtime install, so the `ci-bash` lint and
+test steps are self-sufficient and re-provision-safe. Both pins are
+exercised end to end by their own molecule scenario (install, on PATH,
+exact version, idempotent re-run).
+
+- **shellcheck** pinned to `0.9.0-1` - the `ci-bash` lint step. Unblocks
+  the original shellcheck failure this role was created for.
+- **bats** pinned to `1.10.0-1` - the `ci-bash` test step. Its molecule
+  scenario additionally runs a trivial `.bats` file, since a test runner
+  being on PATH is not the same as it being able to execute a test.
 
 ```yaml
-- name: Install the pinned CI shellcheck
+- name: Install the pinned CI toolchain packages
   ansible.builtin.include_role:
     name: toolchain_apt
   vars:
     toolchain_apt_packages:
       - name: shellcheck
         version: "0.9.0-1"
+      - name: bats
+        version: "1.10.0-1"
 ```
 
 ## Consuming this role
@@ -109,16 +118,21 @@ first needs one.
 ## Tests
 
 [`Tests/molecule/toolchain_apt/`](../../Tests/molecule/toolchain_apt/) has
-one scenario, **default**, covering the plan's cases against a real
-container pulling shellcheck from the Ubuntu archive:
+one scenario per shipped use, each covering the plan's cases against a real
+container pulling the package from the Ubuntu archive:
 
-- **prepare** asserts shellcheck is absent - the "absent" baseline.
-- **converge** installs `shellcheck=0.9.0-1` via the role; `molecule
-  idempotence` re-runs it and asserts `changed: 0`.
-- **verify** asserts shellcheck is on PATH, runs and reports `0.9.0`, and
-  that apt records the exact pinned `0.9.0-1` (so a drifted build fails the
-  pin even if the upstream version string still matched).
+- **default** (shellcheck):
+  - **prepare** asserts shellcheck is absent - the "absent" baseline.
+  - **converge** installs `shellcheck=0.9.0-1` via the role; `molecule
+    idempotence` re-runs it and asserts `changed: 0`.
+  - **verify** asserts shellcheck is on PATH, runs and reports `0.9.0`, and
+    that apt records the exact pinned `0.9.0-1` (so a drifted build fails
+    the pin even if the upstream version string still matched).
+- **bats**: the same absent -> present -> on PATH -> exact pin ->
+  idempotent shape for `bats=1.10.0-1`, and additionally drops a trivial
+  `.bats` file and runs it green - proving the installed runner can execute
+  a test, not merely that the binary resolves on PATH.
 
-The scenario reuses the `toolchain_host_push` base image (python3 + sudo
+Both scenarios reuse the `toolchain_host_push` base image (python3 + sudo
 on ubuntu:24.04) - apt is the whole mechanism, so no localhost fixture is
 needed.
