@@ -1,0 +1,68 @@
+---
+# Install the desired section-2 apt toolchain packages
+# (toolchain_apt_packages) at their pinned versions on the target VM.
+# This is the shared section-2 "VM-downloaded" mechanism: unlike the
+# host-push pattern there is no host staging, file server, or manifest -
+# apt is itself the installed-state source of truth and gives idempotent
+# install for free, so this role stays deliberately thin.
+#
+# An empty toolchain_apt_packages makes every step below a no-op (the
+# specifier list is empty and the install task is skipped), so a play can
+# always include the role and let config decide the package set.
+
+# Fail loudly on a malformed entry (a missing name) before touching apt,
+# so a config typo surfaces here with the offending entry rather than as
+# an opaque apt error later. Version is optional (unpinned = candidate),
+# so it is not asserted.
+- name: Assert each package entry names a package
+  ansible.builtin.assert:
+    that:
+      - item.name is defined
+      - item.name | length > 0
+    fail_msg: >-
+      toolchain_apt_packages entry is missing a 'name': {{ item }}
+  loop: "{{ toolchain_apt_packages }}"
+  loop_control:
+    label: "{{ item.name | default('<no name>') }}"
+
+# Compose the apt name specifiers - "name" when unpinned, "name=version"
+# when pinned. Built in a loop (not one map expression) because the
+# version suffix is conditional per entry; apt accepts the resulting list
+# and installs it in a single transaction below.
+- name: Compose the apt package specifiers
+  ansible.builtin.set_fact:
+    toolchain_apt_specifiers: >-
+      {{ toolchain_apt_specifiers | default([])
+         + [item.name ~ (('=' ~ item.version)
+             if (item.version | default('') | length > 0) else '')] }}
+  loop: "{{ toolchain_apt_packages }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# Refresh the apt cache, throttled by cache_valid_time so a re-run inside
+# the window does not update (and so does not report changed) - this is
+# what keeps the role idempotent while still refreshing an empty cache on
+# a fresh VM. Kept as its own task, ahead of the install, so a stale cache
+# never fails the pinned install with "no candidate".
+- name: Update the apt cache (throttled)
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: "{{ toolchain_apt_cache_valid_time }}"
+  become: true
+  when: toolchain_apt_specifiers | default([]) | length > 0
+
+# Install the pinned set in one transaction. state present with an exact
+# "name=version" is authoritative: apt installs precisely that version and
+# leaves an already-correct package unchanged (idempotent re-run).
+# allow_downgrade makes the pin win even when a newer version is already
+# installed - a re-provision must converge to the pin, not silently keep a
+# drifted-ahead build. update_cache is false here because the throttled
+# task above already handled it; refreshing again would defeat the throttle.
+- name: Install the desired apt toolchain packages
+  ansible.builtin.apt:
+    name: "{{ toolchain_apt_specifiers }}"
+    state: present
+    allow_downgrade: true
+    update_cache: false
+  become: true
+  when: toolchain_apt_specifiers | default([]) | length > 0

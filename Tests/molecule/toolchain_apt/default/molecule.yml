@@ -1,0 +1,54 @@
+---
+# Molecule scenario for the toolchain_apt role - install a pinned apt
+# package (shellcheck 0.9.0-1, the role's shipped section-2 use) on a
+# fresh Ubuntu 24.04 target and prove it lands on PATH at the pinned
+# version, idempotently.
+#
+# Single Ubuntu 24.04 container, Docker driver, ansible verifier. apt is
+# the whole mechanism, so no localhost fixture is needed - the container
+# pulls shellcheck from the real Ubuntu archive over its normal egress
+# (universe is enabled in the noble base image). prepare.yml asserts the
+# absent baseline so this one scenario covers "absent then present".
+#
+# Image: reuses the toolchain_host_push base (python3 + sudo on
+# ubuntu:24.04). python3 is the AnsiballZ interpreter and sudo backs the
+# role's become; the apt lists the base image strips are rebuilt by the
+# role's own cache refresh. No custom Dockerfile - the shared base image
+# already carries everything this scenario needs. Build it via the command
+# in Tests/molecule/toolchain_host_push/Dockerfile.
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: instance
+    image: common-ansible/toolchain-host-push-base:24.04
+    pre_build_image: true
+    command: /bin/sleep infinity
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  env:
+    # ANSIBLE_ROLES_PATH (env) wins over ansible.cfg's roles_path and
+    # propagates across every molecule phase. MOLECULE_PROJECT_DIRECTORY
+    # is the scenario dir; three levels up is the repo root, then roles/.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../../roles"
+  config_options:
+    defaults:
+      stdout_callback: yaml
+      callbacks_enabled: profile_tasks
+  inventory:
+    host_vars:
+      instance:
+        ansible_user: root
+
+verifier:
+  name: ansible

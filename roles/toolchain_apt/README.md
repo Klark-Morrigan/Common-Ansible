@@ -1,0 +1,124 @@
+# Role: toolchain_apt
+
+Installs a set of pinned apt packages directly on the target VM,
+idempotently. It is the shared **section-2** ("VM-downloaded") toolchain
+mechanism - the counterpart to the section-1
+[host-push pattern](../toolchain_host_push/README.md). Where host-push
+caches heavy tarballs on the host and pushes them over the substrate file
+server, section-2 leans on the target's own apt archive for tools small
+enough to pull straight from the distro. It ships with a shellcheck-pinned
+use for the `ci-bash` lint step; see
+[the plan](../../docs/dev/implementation/19-common-ansible-extraction-and-toolchain-provisioning/plan.md#step-61---toolchain_apt-role-with-a-shellcheck-pinned-use).
+
+## Index
+
+- [Var contract](#var-contract)
+- [What it does](#what-it-does)
+- [Why apt, not host-push](#why-apt-not-host-push)
+- [Idempotence](#idempotence)
+- [The shellcheck-pinned use it ships with](#the-shellcheck-pinned-use-it-ships-with)
+- [Consuming this role](#consuming-this-role)
+- [Tests](#tests)
+
+## Var contract
+
+Full field documentation lives in
+[`defaults/main.yml`](defaults/main.yml). In brief:
+
+- `toolchain_apt_packages` (default `[]`) - the desired apt packages.
+  Empty is a no-op (the role only refreshes the apt cache), so a play can
+  always include it and let config decide the set. Each entry:
+  - `name` (required) - apt package name (e.g. `shellcheck`).
+  - `version` (optional) - the exact apt version to pin (e.g.
+    `0.9.0-1`). Pinned installs are authoritative and downgrade a
+    drifted-ahead build; omitted means "apt's candidate", not pinned.
+- `toolchain_apt_cache_valid_time` (default `3600`) - seconds the role
+  trusts a previously-refreshed apt cache before updating it again. This
+  throttle is what makes a re-run a genuine no-op (see
+  [Idempotence](#idempotence)).
+
+## What it does
+
+1. Asserts every entry names a package (a config typo fails here, naming
+   the offending entry, rather than as an opaque apt error later).
+2. Composes the apt name specifiers - `name` when unpinned,
+   `name=version` when pinned.
+3. Refreshes the apt cache, throttled by `toolchain_apt_cache_valid_time`.
+4. Installs the whole set in one apt transaction at `state: present` with
+   `allow_downgrade` so an exact pin always wins.
+
+```mermaid
+flowchart LR
+  PKGS[toolchain_apt_packages] --> SPEC[compose name / name=version]
+  SPEC --> CACHE[apt cache refresh - throttled]
+  CACHE --> INST[apt install pinned set]
+  INST --> BIN[/tool on PATH at the pinned version/]
+```
+
+## Why apt, not host-push
+
+The section-1 host-push pattern exists because heavy toolchains (a JDK, a
+.NET SDK) are large, versioned artifacts worth caching once on the host
+and pushing to each VM over the measured NAT-bypass file server, with a
+manifest-driven uninstall Ansible does not give for free. Section-2 tools
+(shellcheck, bats) are small distro packages: apt fetches them itself over
+the VM's normal egress, and apt is *already* the installed-state source of
+truth, so it provides idempotent install and its own removal for free.
+Reusing the host-push machinery for them would add a host staging step, a
+file server round-trip, and a bespoke manifest for no benefit. That is why
+this role is deliberately thin - it has no staging, no file server, and no
+manifest of its own.
+
+## Idempotence
+
+apt makes an already-installed exact-version package a no-op, so the
+install task alone re-runs clean. The one thing that could report a
+spurious change is the cache refresh, so it is split into its own task
+throttled by `toolchain_apt_cache_valid_time`: the first run on a fresh VM
+(empty cache) refreshes, and any re-run inside the window does not - so the
+whole role reports `changed: 0` on the second pass. The molecule scenario
+asserts this via `molecule idempotence`.
+
+## The shellcheck-pinned use it ships with
+
+The role's first and shipped use is shellcheck, pinned to `0.9.0-1` - the
+apt candidate on the target's Ubuntu 24.04 (noble/universe). This unblocks
+the original `ci-bash` shellcheck step in a durable, re-provision-safe way:
+the runner VM carries a known shellcheck version rather than depending on a
+runtime install. The pin is exercised end to end by the molecule scenario
+(install, on PATH, exact version, idempotent re-run).
+
+```yaml
+- name: Install the pinned CI shellcheck
+  ansible.builtin.include_role:
+    name: toolchain_apt
+  vars:
+    toolchain_apt_packages:
+      - name: shellcheck
+        version: "0.9.0-1"
+```
+
+## Consuming this role
+
+Include it with the desired package set (see the example above). A tool
+too new or absent from the distro archive is out of scope for this role -
+it is the apt mechanism of the section-2 taxonomy; a `get_url`
+static-binary sibling covers tools apt cannot serve, added when a consumer
+first needs one.
+
+## Tests
+
+[`Tests/molecule/toolchain_apt/`](../../Tests/molecule/toolchain_apt/) has
+one scenario, **default**, covering the plan's cases against a real
+container pulling shellcheck from the Ubuntu archive:
+
+- **prepare** asserts shellcheck is absent - the "absent" baseline.
+- **converge** installs `shellcheck=0.9.0-1` via the role; `molecule
+  idempotence` re-runs it and asserts `changed: 0`.
+- **verify** asserts shellcheck is on PATH, runs and reports `0.9.0`, and
+  that apt records the exact pinned `0.9.0-1` (so a drifted build fails the
+  pin even if the upstream version string still matched).
+
+The scenario reuses the `toolchain_host_push` base image (python3 + sudo
+on ubuntu:24.04) - apt is the whole mechanism, so no localhost fixture is
+needed.
