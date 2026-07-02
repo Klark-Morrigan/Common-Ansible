@@ -1,0 +1,25 @@
+---
+# Converge - desire 2.0.0 where prepare installed 1.0.0. The role
+# uninstalls the stale 1.0.0 (dir, symlink, profile, manifest) BEFORE
+# installing 2.0.0, so the shared /usr/local/bin/faketool symlink is
+# freed then retargeted at 2.0.0.
+
+- name: Converge - swap faketool 1.0.0 -> 2.0.0
+  hosts: all
+  gather_facts: false
+  vars:
+    host_file_server_base_url: http://127.0.0.1:18812
+    toolchain_host_push_name: faketool
+    toolchain_host_push_versions:
+      - version: "2.0.0"
+        archive: faketool-2.0.0.tar.gz
+        symlinks:
+          - name: faketool
+            source: bin/faketool
+        profile: |
+          export FAKETOOL_HOME=/opt/faketool-2.0.0
+          export PATH="$FAKETOOL_HOME/bin:$PATH"
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: toolchain_host_push

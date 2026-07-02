@@ -1,0 +1,55 @@
+---
+# Defaults and the input contract for the toolchain_host_push role.
+#
+# This role is the shared section-1 "host-push toolchain" mechanism: it
+# pulls a host-staged tarball via the substrate file server, extracts it
+# to a versioned install dir, wires /usr/local/bin symlinks and an
+# /etc/profile.d script, records each install as a manifest, and removes
+# versions no longer desired. The jdk / dotnet_sdk roles build on it by
+# resolving their own version + tarball name and delegating here.
+#
+# Required inputs (NO default - the caller must supply them; documented
+# here rather than defaulted so an omission fails loudly, not silently):
+#
+#   toolchain_host_push_name       Tool identity string. Drives the
+#                                  install-dir prefix (/opt/<name>-<ver>),
+#                                  the /etc/profile.d/<name>.sh script
+#                                  name, and the manifest file name. One
+#                                  tool per role invocation.
+#   host_file_server_base_url      Base URL of the substrate host file
+#                                  server (the bridge supplies it - the
+#                                  Windows-side listener bound to the
+#                                  Hyper-V switch IP). Tarballs are pulled
+#                                  from <base_url>/<archive>. Shared bridge
+#                                  contract var, so no role-name prefix.
+#
+# toolchain_host_push_versions - the desired set. Empty means "no version
+# desired", which uninstalls every currently installed version of this
+# tool (the set-difference removal). Each entry:
+#
+#   version           (required) Version id string. Keys the install dir,
+#                                the manifest, and the desired/installed diff.
+#   archive           (required) Tarball basename served at
+#                                <base_url>/<archive>.
+#   strip_components  (optional) Leading path components unarchive strips.
+#                                Defaults to 1 - real toolchain tarballs
+#                                ship a single <tool>-<version>/ wrapper
+#                                dir; set 0 for a flat tarball.
+#   symlinks          (optional) List of {name, source}. Creates
+#                                /usr/local/bin/<name> -> <install_dir>/<source>.
+#                                Recorded in the manifest so uninstall
+#                                removes exactly these paths (never a glob).
+#   profile           (optional) Verbatim content for
+#                                /etc/profile.d/<name>.sh (login-shell env,
+#                                e.g. JAVA_HOME + PATH). Omitted/empty writes
+#                                no profile script.
+toolchain_host_push_versions: []
+
+# Install/cache/manifest roots. Overridable but rarely changed. /opt is
+# the conventional home for host-installed toolchains; the cache and
+# manifest stores live under the Common-Ansible-owned state dirs so a
+# shared store cleanly partitions multiple tools by the manifest name
+# pattern (<name>-*.json).
+toolchain_host_push_install_base: /opt
+toolchain_host_push_cache_dir: /var/cache/common-ansible/toolchains
+toolchain_host_push_manifest_dir: /var/lib/common-ansible/toolchains/manifests

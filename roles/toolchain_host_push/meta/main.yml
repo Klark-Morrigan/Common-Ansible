@@ -1,0 +1,30 @@
+---
+# Role metadata. The galaxy_info block exists to satisfy ansible-lint's
+# role-name / meta-no-info rules, not to publish to Galaxy.
+
+galaxy_info:
+  role_name: toolchain_host_push
+  author: Common-Ansible
+  description: >-
+    Shared section-1 host-push toolchain mechanism: pull a host-staged
+    tarball via the substrate file server, extract to a versioned install
+    dir, manage /usr/local/bin symlinks and /etc/profile.d, record each
+    install as a manifest, and remove versions no longer desired. The
+    jdk / dotnet_sdk roles build on it, resolving only their own
+    version and tarball name.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+  galaxy_tags:
+    - system
+    - toolchain
+
+# Standalone: this role carries the whole mechanism and reads its inputs
+# from the caller's vars. The specialized toolchain roles (jdk,
+# dotnet_sdk) include it with their resolved version list rather than
+# depending on it as a meta dep - a meta dep always runs tasks/main.yml
+# and would defeat their own resolve-then-delegate ordering.
+dependencies: []

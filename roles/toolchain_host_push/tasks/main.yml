@@ -1,0 +1,103 @@
+---
+# Reconcile the installed set of host-pushed toolchain versions for one
+# tool (toolchain_host_push_name) against the desired list
+# (toolchain_host_push_versions). This is the shared section-1 mechanism
+# every host-push toolchain role (jdk, dotnet_sdk, ...) builds on: those
+# roles resolve their own version + tarball name, then delegate here.
+#
+# A three-part diff, mirroring the PowerShell toolchain reconciler this
+# ports (Infrastructure-Vm-Provisioner up/reconciler):
+#   1. Read the on-disk manifests -> the installed set (recorded as a
+#      fact so the diff, and any consumer, can inspect it).
+#   2. Uninstall every installed version no longer desired FIRST, so a
+#      version swap frees the shared /usr/local/bin symlink and
+#      /etc/profile.d script before the incoming version claims them.
+#   3. Install every desired version not yet installed.
+#
+# Manifests - not an /opt/<tool>-* directory glob - are the source of
+# truth for what is installed and what each version owns. A glob races
+# against anything an operator added by hand and can miss (or wrongly
+# claim) paths; the manifest records the exact install dir, symlinks, and
+# profile.d script the install created, so uninstall undoes precisely
+# that. See the role README (Record model) for the full rationale.
+
+- name: Ensure the toolchain manifest and cache directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  loop:
+    - "{{ toolchain_host_push_manifest_dir }}"
+    - "{{ toolchain_host_push_cache_dir }}"
+
+# List this tool's manifests. A name pattern scoped to the tool keeps a
+# shared manifest store (multiple tools) correctly partitioned. The dir
+# was just created, so find always returns a (possibly empty) list.
+- name: Find existing manifests for this tool
+  ansible.builtin.find:
+    paths: "{{ toolchain_host_push_manifest_dir }}"
+    patterns: "{{ toolchain_host_push_name }}-*.json"
+    file_type: file
+  become: true
+  register: toolchain_host_push_manifest_files
+
+- name: Read each existing manifest
+  ansible.builtin.slurp:
+    src: "{{ item }}"
+  become: true
+  loop: >-
+    {{ toolchain_host_push_manifest_files.files
+       | map(attribute='path') | list }}
+  loop_control:
+    label: "{{ item }}"
+  register: toolchain_host_push_manifest_slurp
+
+# Project the manifests into the installed-versions fact. Each element is
+# the parsed manifest dict (name, version, install_dir, symlinks,
+# profile_script); the diff below keys off .version.
+- name: Record the installed toolchain versions as a fact
+  ansible.builtin.set_fact:
+    toolchain_host_push_installed: >-
+      {{ toolchain_host_push_manifest_slurp.results
+         | map(attribute='content')
+         | map('b64decode')
+         | map('from_json')
+         | list }}
+
+# Split the installed set into "stale" (installed but no longer desired)
+# and derive the "missing" set (desired but not installed). `rejectattr
+# ... 'in' ...` keeps items whose version is NOT in the other list.
+- name: Compute the stale and missing version sets
+  ansible.builtin.set_fact:
+    toolchain_host_push_stale: >-
+      {{ toolchain_host_push_installed
+         | rejectattr('version', 'in',
+             toolchain_host_push_versions | map(attribute='version') | list)
+         | list }}
+    toolchain_host_push_missing: >-
+      {{ toolchain_host_push_versions
+         | rejectattr('version', 'in',
+             toolchain_host_push_installed | map(attribute='version') | list)
+         | list }}
+
+# Uninstall stale versions BEFORE installing missing ones: a swap
+# ({v1} -> {v2}) removes v1's /usr/local/bin symlink and profile.d script
+# here, then the install below re-creates them pointed at v2. Installing
+# first would let v1's uninstall delete the symlink v2 just claimed (both
+# versions own the same /usr/local/bin/<name> path).
+- name: Uninstall toolchain versions no longer desired
+  ansible.builtin.include_tasks: _uninstall-version.yml
+  loop: "{{ toolchain_host_push_stale }}"
+  loop_control:
+    loop_var: toolchain_host_push_stale_entry
+    label: "{{ toolchain_host_push_stale_entry.version }}"
+
+- name: Install desired toolchain versions not yet present
+  ansible.builtin.include_tasks: _install-version.yml
+  loop: "{{ toolchain_host_push_missing }}"
+  loop_control:
+    loop_var: toolchain_host_push_target
+    label: "{{ toolchain_host_push_target.version }}"

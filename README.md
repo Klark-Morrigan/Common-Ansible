@@ -17,6 +17,8 @@ was extended by the feature step that earned it.
   - [Troubleshooting: WSL default distro has no bash](#troubleshooting-wsl-default-distro-has-no-bash)
   - [Troubleshooting: capturing logs and re-running an interrupted bootstrap](#troubleshooting-capturing-logs-and-re-running-an-interrupted-bootstrap)
 - [Bridge contract](#bridge-contract)
+- [Reusable roles](#reusable-roles)
+  - [Host-push toolchain pattern (toolchain_host_push)](#host-push-toolchain-pattern-toolchain_host_push)
 - [Tests and lint](#tests-and-lint)
 - [Consuming the substrate](#consuming-the-substrate)
 - [Feature folders](#feature-folders)
@@ -354,6 +356,36 @@ host-file-server PowerShell helpers are covered by
 PowerShell calling `HttpListener` or `Get-NetIPAddress`; mocking
 those from bats would require a `pwsh.exe` round-trip per assertion.
 The end-to-end smoke against a real VM is captured in the feature plan.
+
+## Reusable roles
+
+The substrate ships reusable roles under [`roles/`](roles/), consumed by
+their short name once `<root>/roles` is on `ANSIBLE_ROLES_PATH` (see
+[Consuming the substrate](#consuming-the-substrate)). Roles read the
+extra-vars and inventory the bridge composes and are not standalone.
+
+### Host-push toolchain pattern (toolchain_host_push)
+
+[`roles/toolchain_host_push`](roles/toolchain_host_push/) is the shared
+**section-1** ("host-prefetched, pushed") toolchain mechanism: it pulls a
+host-staged tarball via the substrate host file server, extracts it to a
+versioned install dir (`/opt/<tool>-<version>`), wires `/usr/local/bin`
+symlinks and an `/etc/profile.d/<tool>.sh` script, records each install as
+a manifest, and removes versions no longer desired (the one capability
+Ansible does not give for free - a set-difference uninstall). It ports the
+PowerShell toolchain reconciler's model
+(`Infrastructure-Vm-Provisioner` `up/reconciler`) so the later `jdk` /
+`dotnet_sdk` roles differ only in their resolve/version logic and delegate
+the mechanics here.
+
+The record model is deliberately **manifest-per-version**, not an
+`/opt/<tool>-*` directory glob: the manifest records the exact install
+dir, symlinks, and profile script the install created, so uninstall undoes
+precisely that instead of racing a glob against whatever an operator added
+by hand. Install writes the manifest last and uninstall removes it last,
+so a crash mid-operation is self-healing. Full var contract, flow, and the
+molecule scenarios are documented in the
+[role README](roles/toolchain_host_push/README.md).
 
 ## Tests and lint
 

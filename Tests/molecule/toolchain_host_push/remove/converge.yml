@@ -1,0 +1,17 @@
+---
+# Converge - desire the empty set where prepare installed 1.0.0. The role
+# finds 1.0.0 installed, computes it stale (not in the empty desired set),
+# and removes it entirely. host_file_server_base_url is still required by
+# the role's contract but no download runs (nothing to install).
+
+- name: Converge - remove all faketool versions (empty desired set)
+  hosts: all
+  gather_facts: false
+  vars:
+    host_file_server_base_url: http://127.0.0.1:18813
+    toolchain_host_push_name: faketool
+    toolchain_host_push_versions: []
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: toolchain_host_push

@@ -1,0 +1,92 @@
+---
+# Verify the post-converge state for the install direction. Idempotence
+# (re-run reports changed: 0) is checked separately by `molecule
+# idempotence` in the default sequence; this file asserts the state the
+# install produced.
+
+- name: Verify - faketool 1.0.0 install post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    manifest_path: /var/lib/common-ansible/toolchains/manifests/faketool-1.0.0.json
+  tasks:
+    # Install dir + extracted binary: strip_components=1 must have landed
+    # bin/faketool at the install-dir root (not under a wrapper dir).
+    - name: Stat the extracted binary
+      ansible.builtin.stat:
+        path: /opt/faketool-1.0.0/bin/faketool
+      register: extracted_bin
+
+    - name: Assert the binary extracted to the versioned install dir
+      ansible.builtin.assert:
+        that:
+          - extracted_bin.stat.exists
+          - extracted_bin.stat.executable
+        fail_msg: >-
+          /opt/faketool-1.0.0/bin/faketool missing or not executable;
+          stat: {{ extracted_bin.stat }}
+
+    # /usr/local/bin symlink points at the extracted binary.
+    - name: Stat the /usr/local/bin symlink
+      ansible.builtin.stat:
+        path: /usr/local/bin/faketool
+      register: symlink
+
+    - name: Assert the symlink targets the install dir binary
+      ansible.builtin.assert:
+        that:
+          - symlink.stat.exists
+          - symlink.stat.islnk
+          - symlink.stat.lnk_target == '/opt/faketool-1.0.0/bin/faketool'
+        fail_msg: >-
+          /usr/local/bin/faketool is not a symlink to the install dir
+          binary; stat: {{ symlink.stat }}
+
+    # The symlinked binary runs and reports the installed version - proves
+    # the whole chain (extract -> symlink -> PATH) end to end.
+    - name: Run the symlinked binary
+      ansible.builtin.command: faketool
+      changed_when: false
+      register: tool_run
+
+    - name: Assert the binary reports the installed version
+      ansible.builtin.assert:
+        that:
+          - "'faketool 1.0.0 fixture' in tool_run.stdout"
+        fail_msg: "faketool did not report version 1.0.0: {{ tool_run.stdout }}"
+
+    # profile.d script content is written verbatim.
+    - name: Slurp the profile.d script
+      ansible.builtin.slurp:
+        src: /etc/profile.d/faketool.sh
+      register: profile_script
+
+    - name: Assert the profile.d script wires FAKETOOL_HOME
+      ansible.builtin.assert:
+        that:
+          - "'FAKETOOL_HOME=/opt/faketool-1.0.0' in (profile_script.content | b64decode)"
+        fail_msg: >-
+          /etc/profile.d/faketool.sh does not wire FAKETOOL_HOME:
+          {{ profile_script.content | b64decode }}
+
+    # Manifest content records exactly what the install owns.
+    - name: Slurp the version manifest
+      ansible.builtin.slurp:
+        src: "{{ manifest_path }}"
+      register: manifest_raw
+
+    - name: Parse the manifest
+      ansible.builtin.set_fact:
+        manifest: "{{ manifest_raw.content | b64decode | from_json }}"
+
+    - name: Assert the manifest records the version, install dir, and symlink
+      ansible.builtin.assert:
+        that:
+          - manifest.version == '1.0.0'
+          - manifest.name == 'faketool'
+          - manifest.install_dir == '/opt/faketool-1.0.0'
+          - manifest.profile_script == 'faketool'
+          - manifest.symlinks | length == 1
+          - manifest.symlinks[0].path == '/usr/local/bin/faketool'
+          - manifest.symlinks[0].target == '/opt/faketool-1.0.0/bin/faketool'
+        fail_msg: "Manifest content is wrong: {{ manifest }}"

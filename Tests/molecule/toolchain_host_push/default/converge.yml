@@ -1,0 +1,29 @@
+---
+# Converge - install a single toolchain version via the host-push
+# pattern. faketool 1.0.0 pulls from the in-container fixture server,
+# extracts to /opt/faketool-1.0.0, symlinks /usr/local/bin/faketool, and
+# writes /etc/profile.d/faketool.sh.
+#
+# include_role (not import_role) defers role resolution to runtime so the
+# molecule.yml ANSIBLE_ROLES_PATH override is honoured (import_role
+# resolves at parse time against the syntax-check search path).
+
+- name: Converge - install faketool 1.0.0
+  hosts: all
+  gather_facts: false
+  vars:
+    host_file_server_base_url: http://127.0.0.1:18811
+    toolchain_host_push_name: faketool
+    toolchain_host_push_versions:
+      - version: "1.0.0"
+        archive: faketool-1.0.0.tar.gz
+        symlinks:
+          - name: faketool
+            source: bin/faketool
+        profile: |
+          export FAKETOOL_HOME=/opt/faketool-1.0.0
+          export PATH="$FAKETOOL_HOME/bin:$PATH"
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: toolchain_host_push
