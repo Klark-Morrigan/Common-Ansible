@@ -32,6 +32,21 @@
   become: true
   when: toolchain_host_push_stale_entry.profile_script | default('') | length > 0
 
+# Remove the fixed config files this version wrote outside its install dir
+# (e.g. .NET's /etc/dotnet/install_location) before the dir goes, mirroring
+# the profile.d removal above: a tool shim that reads such a file stops
+# pointing at the about-to-vanish install dir. Only the recorded files are
+# removed, never their parent dir (shared with other tooling). `| default([])`
+# tolerates a manifest written before owned_files existed (e.g. a JDK).
+- name: Remove the recorded owned files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  become: true
+  loop: "{{ toolchain_host_push_stale_entry.owned_files | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+
 - name: Remove the versioned install directory
   ansible.builtin.file:
     path: "{{ toolchain_host_push_stale_entry.install_dir }}"

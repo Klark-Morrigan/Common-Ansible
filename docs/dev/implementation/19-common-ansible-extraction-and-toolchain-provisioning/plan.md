@@ -628,10 +628,13 @@ manage `/usr/local/bin` symlinks (either an explicit per-version list, or
 `symlink_bin_dir` - a subdir whose files are all symlinked, enumerated at
 install time, for a tool like the JDK whose launcher set is only known
 post-extraction; both record every link in the manifest so uninstall
-stays glob-free) and `/etc/profile.d/<tool>.sh`, record installed versions
-as a fact, and remove versions no longer desired (the one capability
-Ansible does not give for free, per
-[Solution approach](problem.md#solution-approach)).
+stays glob-free) and `/etc/profile.d/<tool>.sh`, write any fixed config
+files a tool needs *outside* its install dir (an optional per-version
+`owned_files` list - e.g. .NET's `/etc/dotnet/install_location`; each is
+recorded in the manifest and removed on uninstall, never its shared parent
+dir, so removal stays glob-free too), record installed versions as a fact,
+and remove versions no longer desired (the one capability Ansible does not
+give for free, per [Solution approach](problem.md#solution-approach)).
 
 - **Reason:** Establishes the section-1 pattern so JDK/.NET roles differ
   only in their resolve/version logic.
@@ -647,6 +650,7 @@ flowchart TD
   PULL --> UNP[unarchive to /opt/tool-version]
   UNP --> LN[symlink /usr/local/bin]
   UNP --> PD[/etc/profile.d/tool.sh/]
+  UNP --> OF[owned_files e.g. /etc/dotnet/install_location]
   LN --> FACT[record installed fact]
   FACT --> DIFF{desired vs installed}
   DIFF -->|stale| RM[remove old version]

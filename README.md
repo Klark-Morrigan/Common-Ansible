@@ -392,7 +392,11 @@ The pattern supports two symlink modes per version: an explicit `symlinks`
 list, and `symlink_bin_dir` - a subdir whose files are all symlinked into
 `/usr/local/bin`, enumerated at install time (for tools like the JDK whose
 launcher set is only known post-extraction). Both record every link in the
-manifest, so uninstall stays glob-free.
+manifest, so uninstall stays glob-free. A per-version `owned_files` list is
+the generic escape hatch for a tool that needs a fixed config file *outside*
+its install dir (e.g. .NET's `/etc/dotnet/install_location`): the pattern
+writes it at install and removes it on uninstall, recording the path in the
+manifest so removal stays glob-free too.
 
 ### JDK (jdk)
 

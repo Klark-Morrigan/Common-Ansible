@@ -171,9 +171,40 @@
   become: true
   when: toolchain_host_push_target.profile | default('') | length > 0
 
+# Fixed config files the tool needs outside its install dir (e.g. .NET's
+# /etc/dotnet/install_location). The parent dir is created first because
+# copy does not make it, and uninstall removes only the file (not the dir,
+# which other tooling may share). Each path is recorded in the manifest
+# below so uninstall tears down exactly these - never a glob. Optional: a
+# tool whose footprint is just dir + symlinks + profile omits `owned_files`.
+- name: Ensure each owned file's parent directory exists
+  ansible.builtin.file:
+    path: "{{ item.path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  loop: "{{ toolchain_host_push_target.owned_files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Write the owned files
+  ansible.builtin.copy:
+    dest: "{{ item.path }}"
+    content: "{{ item.content }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode | default('0644') }}"
+  become: true
+  loop: "{{ toolchain_host_push_target.owned_files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+
 # Manifest LAST (see file header). Records exactly what this install owns
 # so uninstall mirrors it without filesystem heuristics. profile_script
-# is the tool name when a profile was written, else empty.
+# is the tool name when a profile was written, else empty. owned_files is
+# the path list (removal needs only the path, not the content/mode).
 - name: Write the version manifest
   ansible.builtin.copy:
     dest: >-
@@ -195,3 +226,6 @@
         {{ toolchain_host_push_name
            if (toolchain_host_push_target.profile | default('') | length > 0)
            else '' }}
+      owned_files: >-
+        {{ toolchain_host_push_target.owned_files | default([])
+           | map(attribute='path') | list }}

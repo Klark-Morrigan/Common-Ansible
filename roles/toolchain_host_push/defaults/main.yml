@@ -50,6 +50,19 @@
 #                                /etc/profile.d/<name>.sh (login-shell env,
 #                                e.g. JAVA_HOME + PATH). Omitted/empty writes
 #                                no profile script.
+#   owned_files       (optional) List of {path, content, mode}. Each is a
+#                                fixed config file the tool needs OUTSIDE its
+#                                install dir - e.g. .NET's
+#                                /etc/dotnet/install_location. Written at
+#                                install (its parent dir created first) and
+#                                recorded in the manifest, so uninstall
+#                                removes exactly these files - never the
+#                                parent dir, which other tooling may share.
+#                                `mode` defaults to "0644". This is the
+#                                generic escape hatch for a toolchain whose
+#                                footprint is not just install dir + symlinks
+#                                + one profile script; a tool with none omits
+#                                the field.
 toolchain_host_push_versions: []
 
 # Install/cache/manifest roots. Overridable but rarely changed. /opt is

@@ -39,7 +39,10 @@ Full field documentation lives in
   whose files are all symlinked into `/usr/local/bin`, enumerated at
   install time - for tools like the JDK whose launcher set is only known
   post-extraction), `profile` (verbatim `/etc/profile.d` content, omitted
-  for none).
+  for none), `owned_files` (list of `{path, content, mode}` fixed config
+  files the tool needs *outside* its install dir - e.g. .NET's
+  `/etc/dotnet/install_location` - written at install and removed on
+  uninstall; `mode` defaults to `0644`, omitted for none).
 - `toolchain_host_push_install_base` (default `/opt`),
   `toolchain_host_push_cache_dir`
   (default `/var/cache/common-ansible/toolchains`),
@@ -96,7 +99,8 @@ One JSON manifest per installed version under
   "symlinks": [
     { "path": "/usr/local/bin/java", "target": "/opt/jdk-21.0.4/bin/java" }
   ],
-  "profile_script": "jdk"
+  "profile_script": "jdk",
+  "owned_files": []
 }
 ```
 
@@ -111,6 +115,13 @@ approach for the same reason.
 
 `profile_script` is the tool name when a profile was written, else the
 empty string (the uninstall skips the profile removal on empty).
+
+`owned_files` is the list of fixed config-file paths the version wrote
+outside its install dir (empty for a tool like the JDK that has none).
+Uninstall removes exactly these paths and never their parent directory,
+which other tooling may share - the same no-glob discipline the manifest
+enforces for symlinks. A manifest written before this field existed reads
+back as an empty list, so the addition is backward compatible.
 
 `symlink_bin_dir` does not weaken this model: it enumerates a bin subdir
 **at install time** and records each resulting link under `symlinks`, so
