@@ -753,6 +753,8 @@ consumer flow needs the equivalent pin here.
   README; this repo's README only references the reusable roles it
   consumes.
 
+Target flow (this step):
+
 ```mermaid
 flowchart LR
   subgraph CON[consumer repo]
@@ -761,12 +763,34 @@ flowchart LR
   end
   UP[(Adoptium / upstream)] --> ACQ
   ACQ -->|staged tarball| HFS[(substrate host file server)]
+  CA[(Common-Ansible substrate)] -->|reusable roles| PB
   PB --> JR[jdk role]
   PB --> DR[dotnet roles]
   JR -->|pull by name| HFS
-  JR --> CA[(Common-Ansible substrate)]
-  DR --> CA
+  DR -->|pull by name| HFS
+  JR -->|install| VM[(target VM)]
+  DR -->|install| VM
 ```
+
+Prior flow (the PowerShell reconciler this replaces), shown for contrast -
+one monolithic engine on the controller did resolve, acquire+verify, and
+push-install per VM, with no substrate/consumer split:
+
+```mermaid
+flowchart LR
+  subgraph REC[PowerShell reconciler on the controller]
+    RES[resolve version]
+    ACQ2[acquire + verify checksum + host cache]
+    INST[Install-Version over SSH]
+  end
+  UP2[(Adoptium / upstream)] --> ACQ2
+  RES --> ACQ2 --> INST
+  INST -->|stream tarball + extract| VM[(target VM)]
+```
+
+The split is the point of the contrast: the target flow moves upstream
+fetch + integrity into a deploying consumer and the install mechanics into
+reusable substrate roles, where the prior engine fused all three.
 
 ### Step 5.6 - Define the cutover criterion; keep the PS reconciler as a fork
 
