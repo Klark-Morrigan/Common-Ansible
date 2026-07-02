@@ -745,9 +745,12 @@ consumer flow needs the equivalent pin here.
 - **Reason:** Separates "reusable roles" (substrate) from "who gets what
   on which box" (a deploying consumer), and puts upstream fetch +
   integrity verification with the consumer that owns the estate's egress.
-- **Tests:** Integration - run the flow against a disposable VM and assert
-  the toolchain is present and on PATH; a tampered/mismatched checksum
-  fails staging before anything reaches the VM.
+- **Tests:** Unit (in the consumer repo) - a tampered/mismatched checksum
+  fails staging before anything reaches the VM, asserted against the
+  acquire/verify/stage step with the resolvers and downloads stubbed. The
+  live end-to-end assertion - the flow run against a disposable VM with the
+  toolchain present and on PATH - runs through Infrastructure-E2E on PR, not
+  as an in-repo suite, so live-Hyper-V coverage stays in the E2E repo.
 - **README:** Document the toolchain targeting flow (playbook +
   inventory) and the acquire-verify-stage step in the consumer repo's
   README; this repo's README only references the reusable roles it
@@ -810,6 +813,75 @@ production runner with parity on install/swap/uninstall.
 flowchart LR
   PS[PS reconciler - fork] -. retire when .-> CRIT[Ansible parity proven on prod]
   ANS[Ansible toolchain flow] --> CRIT
+```
+
+### Step 5.7 - Slice the Vm-Provisioner PowerShell reconciler into per-impl folders
+
+Reorganize Infrastructure-Vm-Provisioner's flat `hyper-v/ubuntu/` tree into
+the same self-contained per-impl slices the other consumers already carry
+(Step 4.1): `shared/`, `PowerShell/`, `Ansible/`. The `Ansible/` slice
+already exists (Step 5.5). Move the PowerShell reconciler - `common/`,
+`up/`, `down/`, `provision.ps1`, `deprovision.ps1`, `ensure-vms-ready.ps1`,
+`start-vms.ps1`, `Install-ModuleDependencies.ps1` - into `PowerShell/`, and
+`setup-secrets.ps1` (the vault writer both impls read) into `shared/`.
+
+The tree moves as a unit, so the reconciler's own `$PSScriptRoot`-relative
+dot-sources survive untouched; the seams that break are the references from
+outside the moved tree:
+
+- the `.menu` files (`menus.psd1`, `cluster-order.psd1`,
+  `manual-dependencies.psd1`, `Get-ScenarioMenus.ps1`) that resolve this
+  repo's entry scripts by path;
+- Infrastructure-E2E's resolution of `provision.ps1` / `deprovision.ps1`
+  (and the `setup-secrets.ps1` writer);
+- every `Tests/` dot-source path - Tests mirrors production, so the Tests
+  tree reorganizes in lockstep;
+- Step 5.5's `Stage-ToolchainArtifacts.ps1`, whose reuse-reach into the
+  reconciler resolvers (`..\..\up\jdk\Resolve-AdoptiumRelease.ps1`,
+  `..\..\up\dotnet\Resolve-DotnetSdkRelease.ps1`) becomes
+  `..\..\PowerShell\up\...`;
+- the CI runner shims and README paths that name the moved scripts.
+
+The `Ansible/ops/imports/` sibling-root resolvers are unaffected: they walk
+six levels to the repo root and `Ansible/` stays at
+`hyper-v/ubuntu/Ansible/`, so the Common-Ansible / Common-Automation sibling
+resolution needs no change.
+
+- **Reason:** One repo layout across the fleet - `shared` / `PowerShell` /
+  `Ansible` means the same thing in every consumer - so the two toolchain
+  impls (the PS reconciler and the Step 5.5 Ansible flow) are self-contained
+  slices rather than a flat tree with an `Ansible/` subfolder bolted on.
+  Recorded tension: the reconciler is slated for retirement at the 5.6
+  cutover, so this is a deliberate symmetry choice that accepts churn on
+  transitional code; kept a pure move (no behaviour change) to bound it.
+- **Tests:** Pure relocation, no behaviour change - coverage must not
+  regress. The existing Pester suite is green after its dot-source paths are
+  repointed; provision / deprovision / ensure-vms-ready / start-vms still
+  dispatch from `PowerShell/`; Step 5.5's toolchain Pester is green after its
+  `..\..\PowerShell\up\...` update; the `.menu` loads and resolves the moved
+  entry scripts; Infrastructure-E2E resolves the moved `provision.ps1` /
+  `deprovision.ps1`.
+- **README:** Update Infrastructure-Vm-Provisioner's README "Repo structure"
+  and every script path it names to the sliced layout, and note the `shared`
+  / `PowerShell` / `Ansible` slice convention it now shares with the other
+  consumers; Infrastructure-E2E's docs that name the resolved paths update in
+  lockstep. This repo's (Common-Ansible) README is unchanged.
+
+```mermaid
+flowchart LR
+  subgraph before[flat]
+    F1[common / up / down / reconciler *.ps1]
+    F2[Ansible/ slice from 5.5]
+  end
+  subgraph after[sliced]
+    S[shared/: setup-secrets.ps1]
+    P[PowerShell/: common / up / down / reconciler *.ps1]
+    A[Ansible/: toolchain flow]
+  end
+  F1 --> P
+  F1 --> S
+  F2 --> A
+  P -. seams repointed .-> SEAMS[.menu / E2E / Tests / 5.5 dot-source]
 ```
 
 ## Section 6 - shellcheck role
