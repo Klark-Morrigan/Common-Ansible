@@ -20,6 +20,7 @@ was extended by the feature step that earned it.
 - [Reusable roles](#reusable-roles)
   - [Host-push toolchain pattern (toolchain_host_push)](#host-push-toolchain-pattern-toolchain_host_push)
   - [JDK (jdk)](#jdk-jdk)
+  - [.NET SDK (dotnet_sdk)](#net-sdk-dotnet_sdk)
 - [Tests and lint](#tests-and-lint)
 - [Consuming the substrate](#consuming-the-substrate)
 - [Feature folders](#feature-folders)
@@ -410,6 +411,22 @@ every JDK launcher, and a `JAVA_HOME` + `PATH` profile is written). v1
 installs one JDK per host. It ports the PowerShell reconciler's
 `JdkProvider`; full contract, the resolution table, and the molecule
 scenarios are in the [role README](roles/jdk/README.md).
+
+### .NET SDK (dotnet_sdk)
+
+[`roles/dotnet_sdk`](roles/dotnet_sdk/) is the second real consumer of the
+host-push pattern. It adds **only** .NET release-feed resolution: an
+operator `{channel, version}` pin (channel `10.0`; version `10`, `10.0`, or
+`10.0.100`) resolves against Microsoft's per-channel `releases.json` into a
+concrete `{version, tarball name}`, and the install / version-swap /
+uninstall mechanics delegate to `toolchain_host_push`. The .NET specifics
+it composes onto the pattern are a flat extract (`strip_components: 0`), a
+single `dotnet` driver symlink, a `DOTNET_ROOT` + tools-PATH +
+telemetry-opt-out profile, and an `owned_files` entry for
+`/etc/dotnet/install_location` (the non-login-shell runtime hint). v1
+installs one SDK per host. It ports the PowerShell reconciler's
+`DotnetSdkProvider`; full contract, the resolution table, and the molecule
+scenarios are in the [role README](roles/dotnet_sdk/README.md).
 
 ## Tests and lint
 

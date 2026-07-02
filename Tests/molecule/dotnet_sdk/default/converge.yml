@@ -1,0 +1,24 @@
+---
+# Converge - resolve the major-only pin "10" on channel 10.0 against the
+# fixture feed and install it via the host-push pattern. The fixture's
+# latest-sdk is 10.0.100, so the resolver picks it, and toolchain_host_push
+# extracts to /opt/dotnet-10.0.100 (strip_components=0), symlinks the
+# `dotnet` driver, writes /etc/profile.d/dotnet.sh, and writes
+# /etc/dotnet/install_location via the owned_files mechanism.
+#
+# include_role (not import_role) defers resolution to runtime so the
+# molecule.yml ANSIBLE_ROLES_PATH override is honoured.
+
+- name: Converge - install .NET SDK 10
+  hosts: all
+  gather_facts: false
+  vars:
+    dotnet_sdk_releases_base_url: http://127.0.0.1:18831/dotnet/release-metadata
+    host_file_server_base_url: http://127.0.0.1:18831
+    dotnet_sdk_versions:
+      - channel: "10.0"
+        version: "10"
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: dotnet_sdk

@@ -1,0 +1,22 @@
+---
+# Prepare the default scenario: bring the fixture up serving channel 10.0
+# with latest-sdk 10.0.100 (so a major-only pin resolves to it). The
+# converge then resolves pin "10" and installs it; molecule idempotence
+# re-runs converge to prove the no-op.
+
+- name: Prepare - bring the .NET feed + fileserver fixture up
+  hosts: all
+  gather_facts: false
+  vars:
+    fixture_port: 18831
+    fixture_stage_dir: /var/lib/dotnet-fixture/srv
+    fixture_build_dir: /var/lib/dotnet-fixture/build
+    fixture_api_prefix: dotnet/release-metadata
+    fixture_channel: "10.0"
+    fixture_latest_sdk: "10.0.100"
+    fixture_sdks:
+      - version: "10.0.100"
+        archive: dotnet-sdk-10.0.100-linux-x64.tar.gz
+  tasks:
+    - name: Bring the fixture http server up
+      ansible.builtin.include_tasks: ../tasks/_fixture-dotnet.yml

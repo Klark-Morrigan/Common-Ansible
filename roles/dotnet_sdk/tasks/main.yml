@@ -1,0 +1,94 @@
+---
+# dotnet_sdk role entry point. Like jdk, it adds only resolve/version logic
+# on top of the section-1 host-push pattern (roles/toolchain_host_push):
+#   1. Validate the v1 single-SDK cap.
+#   2. Resolve each channel + version pin against the .NET release-metadata
+#      feed into a concrete {version, archive}
+#      (tasks/_resolve-dotnet-release.yml).
+#   3. Compose the toolchain_host_push desired set from the resolved
+#      releases and delegate install / swap / uninstall to that role.
+#
+# An empty dotnet_sdk_versions resolves to an empty desired set, so the
+# pattern uninstalls every SDK it has installed - the same set-difference
+# removal it gives every tool. No feed query is made in that case (the loop
+# is empty), so an uninstall-only run needs no feed reachability.
+
+# v1 hard cap - see defaults/main.yml for why one SDK per host. The message
+# names the observed count so an operator editing the list does not have to
+# recount it. Mirrors DotnetSdkProvider's cap.
+- name: Assert at most one .NET SDK version is desired
+  ansible.builtin.assert:
+    that:
+      - dotnet_sdk_versions | length <= 1
+    fail_msg: >-
+      dotnet_sdk_versions supports one SDK per host in v1; got
+      {{ dotnet_sdk_versions | length }} entries.
+
+# Seed the accumulator the resolver appends to (one resolved release per
+# entry). Kept as a list so the compose step below and toolchain_host_push
+# both work against the same list shape a multi-SDK v2 would use.
+- name: Initialise the resolved-versions accumulator
+  ansible.builtin.set_fact:
+    dotnet_sdk_resolved_versions: []
+
+- name: Resolve each desired SDK entry against the release feed
+  ansible.builtin.include_tasks: _resolve-dotnet-release.yml
+  loop: "{{ dotnet_sdk_versions }}"
+  loop_control:
+    loop_var: dotnet_sdk_entry
+    label: "{{ dotnet_sdk_entry.channel }}/{{ dotnet_sdk_entry.version }}"
+
+# Compose the host-push desired set, one entry per resolved release. The
+# .NET-specific mechanics (all mirrors of DotnetSdkProvider.Install-Version):
+#   strip_components: 0 - Microsoft's SDK tarball lays its files at the
+#     archive root, unlike Adoptium's jdk-<version>/ wrapper dir.
+#   symlinks: one link for the `dotnet` driver - every SDK tool
+#     (`dotnet build`, `dotnet test`, ...) dispatches through it, so there
+#     is no per-launcher enumeration as there is for the JDK.
+#   profile: DOTNET_ROOT (the SDK's shared-framework probe root), the tools
+#     dir on PATH, and the CLI telemetry opt-out (unattended CI runners have
+#     no operator to consent; the opt-out is per-shell so it lives here).
+#     DOTNET_ROOT must equal the pattern's install dir
+#     (dotnet_sdk_install_base/dotnet-<version>), so both read the same var.
+#   owned_files: /etc/dotnet/install_location - Microsoft's fixed runtime-
+#     discovery hint for the apphost that every `dotnet tool` shim is built
+#     around. DOTNET_ROOT covers login shells; this file covers non-login
+#     shells (sshd command exec, systemd, cron), where a global tool would
+#     otherwise fail with "You must install .NET to run this application".
+#     The pattern writes and (on uninstall) removes it. Built in a loop
+#     because each entry's profile/owned-file reference that entry's dir.
+#     Single-quoted export values stay literal in the written .sh so the
+#     login shell expands $DOTNET_ROOT/$PATH, not this play.
+- name: Build the host-push desired set from the resolved releases
+  ansible.builtin.set_fact:
+    dotnet_sdk_final_versions: "{{ dotnet_sdk_final_versions | default([]) + [entry] }}"
+  loop: "{{ dotnet_sdk_resolved_versions }}"
+  loop_control:
+    loop_var: dotnet_sdk_resolved
+    label: "{{ dotnet_sdk_resolved.version }}"
+  vars:
+    dotnet_sdk_dir: "{{ dotnet_sdk_install_base }}/dotnet-{{ dotnet_sdk_resolved.version }}"
+    entry:
+      version: "{{ dotnet_sdk_resolved.version }}"
+      archive: "{{ dotnet_sdk_resolved.archive }}"
+      strip_components: 0
+      symlinks:
+        - name: dotnet
+          source: dotnet
+      profile: |
+        export DOTNET_ROOT={{ dotnet_sdk_dir }}
+        export DOTNET_TOOLS_ROOT={{ dotnet_sdk_tools_root }}
+        export PATH="$DOTNET_ROOT:$DOTNET_TOOLS_ROOT:$PATH"
+        export DOTNET_CLI_TELEMETRY_OPTOUT=1
+      owned_files:
+        - path: /etc/dotnet/install_location
+          content: "{{ dotnet_sdk_dir }}\n"
+          mode: "0644"
+
+- name: Reconcile the .NET SDK via the host-push toolchain pattern
+  ansible.builtin.include_role:
+    name: toolchain_host_push
+  vars:
+    toolchain_host_push_name: dotnet
+    toolchain_host_push_install_base: "{{ dotnet_sdk_install_base }}"
+    toolchain_host_push_versions: "{{ dotnet_sdk_final_versions | default([]) }}"

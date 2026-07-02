@@ -1,0 +1,41 @@
+---
+# Molecule scenario for the dotnet_sdk role - version swap. prepare installs
+# .NET SDK 10.0.100; converge desires 10.0.101, so the pattern uninstalls
+# 10.0.100 and installs 10.0.101. molecule idempotence then re-runs converge
+# (10.0.101 already installed, 10.0.100 already gone -> no change).
+#
+# Same container/driver/verifier shape as the default scenario; see that
+# scenario's molecule.yml for the per-setting rationale.
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: instance
+    image: common-ansible/toolchain-host-push-base:24.04
+    pre_build_image: true
+    command: /bin/sleep infinity
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../../roles"
+  config_options:
+    defaults:
+      stdout_callback: yaml
+      callbacks_enabled: profile_tasks
+  inventory:
+    host_vars:
+      instance:
+        ansible_user: root
+
+verifier:
+  name: ansible
