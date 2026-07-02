@@ -39,6 +39,13 @@
 #                                /usr/local/bin/<name> -> <install_dir>/<source>.
 #                                Recorded in the manifest so uninstall
 #                                removes exactly these paths (never a glob).
+#   symlink_bin_dir   (optional) Subdir of the install dir whose files are
+#                                ALL symlinked into /usr/local/bin (e.g.
+#                                'bin' for a JDK, whose launcher set is only
+#                                known post-extraction). Enumerated at
+#                                install time and each link recorded in the
+#                                manifest, just like `symlinks`. Combine
+#                                with `symlinks` or use alone.
 #   profile           (optional) Verbatim content for
 #                                /etc/profile.d/<name>.sh (login-shell env,
 #                                e.g. JAVA_HOME + PATH). Omitted/empty writes

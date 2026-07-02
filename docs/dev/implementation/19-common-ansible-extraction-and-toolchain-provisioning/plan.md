@@ -624,9 +624,13 @@ criterion in 5.6.
 
 Build the shared mechanics one role models: pull a host-staged tarball
 via the substrate file server, unarchive to a versioned install dir,
-manage `/usr/local/bin` symlinks and `/etc/profile.d/<tool>.sh`, record
-installed versions as a fact, and remove versions no longer desired (the
-one capability Ansible does not give for free, per
+manage `/usr/local/bin` symlinks (either an explicit per-version list, or
+`symlink_bin_dir` - a subdir whose files are all symlinked, enumerated at
+install time, for a tool like the JDK whose launcher set is only known
+post-extraction; both record every link in the manifest so uninstall
+stays glob-free) and `/etc/profile.d/<tool>.sh`, record installed versions
+as a fact, and remove versions no longer desired (the one capability
+Ansible does not give for free, per
 [Solution approach](problem.md#solution-approach)).
 
 - **Reason:** Establishes the section-1 pattern so JDK/.NET roles differ

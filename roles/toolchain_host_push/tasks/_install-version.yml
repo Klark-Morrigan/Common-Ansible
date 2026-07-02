@@ -111,6 +111,53 @@
       path: "/usr/local/bin/{{ item.name }}"
       target: "{{ toolchain_host_push_install_dir }}/{{ item.source }}"
 
+# Optional bulk-symlink mode. A tool like the JDK ships dozens of
+# launchers (java, javac, jar, keytool, ...) whose exact set is only
+# known after extraction, so the caller cannot enumerate them upfront in
+# `symlinks`. `symlink_bin_dir` names a subdir of the install dir whose
+# files are ALL symlinked into /usr/local/bin. Enumeration happens here,
+# at install time, and every link is recorded in the manifest exactly
+# like an explicit `symlinks` entry - so uninstall still reads back
+# precise paths and never globs (the record model's core invariant).
+# This runs only for the `missing` set (main.yml), so a no-op re-run
+# never re-enumerates: idempotence is preserved by the skip, not a guard.
+- name: Enumerate the bin-subdir files to symlink
+  ansible.builtin.find:
+    paths: >-
+      {{ toolchain_host_push_install_dir }}/{{
+      toolchain_host_push_target.symlink_bin_dir }}
+    file_type: file
+    recurse: false
+  become: true
+  register: toolchain_host_push_bin_files
+  when: toolchain_host_push_target.symlink_bin_dir | default('') | length > 0
+
+- name: Create the /usr/local/bin symlinks for the bin-subdir files
+  ansible.builtin.file:
+    src: "{{ item.path }}"
+    dest: "/usr/local/bin/{{ item.path | basename }}"
+    state: link
+    force: true
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  loop: "{{ toolchain_host_push_bin_files.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+
+- name: Record the bin-subdir symlink ownership entries for the manifest
+  ansible.builtin.set_fact:
+    toolchain_host_push_symlink_records: >-
+      {{ toolchain_host_push_symlink_records + [record] }}
+  loop: "{{ toolchain_host_push_bin_files.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  vars:
+    record:
+      path: "/usr/local/bin/{{ item.path | basename }}"
+      target: "{{ item.path }}"
+
 # Login-shell PATH/env via /etc/profile.d/<tool>.sh. Optional: a tool
 # with no env (pure symlinks) omits `profile`. Written verbatim so the
 # user's shell expands any $VAR at login, not here.

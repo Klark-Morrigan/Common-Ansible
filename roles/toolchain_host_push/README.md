@@ -35,8 +35,11 @@ Full field documentation lives in
 - `toolchain_host_push_versions` (default `[]`) - the desired set. Empty
   uninstalls every installed version of this tool. Each entry:
   `version` (required), `archive` (required), `strip_components` (default
-  `1`), `symlinks` (list of `{name, source}`), `profile` (verbatim
-  `/etc/profile.d` content, omitted for none).
+  `1`), `symlinks` (list of `{name, source}`), `symlink_bin_dir` (subdir
+  whose files are all symlinked into `/usr/local/bin`, enumerated at
+  install time - for tools like the JDK whose launcher set is only known
+  post-extraction), `profile` (verbatim `/etc/profile.d` content, omitted
+  for none).
 - `toolchain_host_push_install_base` (default `/opt`),
   `toolchain_host_push_cache_dir`
   (default `/var/cache/common-ansible/toolchains`),
@@ -108,6 +111,13 @@ approach for the same reason.
 
 `profile_script` is the tool name when a profile was written, else the
 empty string (the uninstall skips the profile removal on empty).
+
+`symlink_bin_dir` does not weaken this model: it enumerates a bin subdir
+**at install time** and records each resulting link under `symlinks`, so
+the manifest still names every owned path. The no-glob rule the record
+model exists to enforce is about *uninstall*-time discovery (which would
+race an operator's hand-edits); deriving the link set once, at install,
+and pinning it in the manifest is exactly the guarantee that rule wants.
 
 ## Idempotence guarantees
 
