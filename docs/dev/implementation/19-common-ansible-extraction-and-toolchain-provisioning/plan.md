@@ -901,12 +901,6 @@ candidate `0.9.0-1` on the target's Ubuntu 24.04).
 - **README:** `toolchain_apt` role README (the section-2 pattern and the
   shellcheck-pinned use it ships with).
 
-```mermaid
-flowchart LR
-  CFG[section-2 entry: shellcheck] --> APT[ansible.builtin.apt/get_url]
-  APT --> BIN[/usr/bin/shellcheck/]
-```
-
 ## Section 7 - bats role
 
 ### Step 7.1 - bats via the section-2 role
