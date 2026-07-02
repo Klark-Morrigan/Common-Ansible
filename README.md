@@ -21,6 +21,7 @@ was extended by the feature step that earned it.
   - [Host-push toolchain pattern (toolchain_host_push)](#host-push-toolchain-pattern-toolchain_host_push)
   - [JDK (jdk)](#jdk-jdk)
   - [.NET SDK (dotnet_sdk)](#net-sdk-dotnet_sdk)
+  - [.NET global tools (dotnet_tools)](#net-global-tools-dotnet_tools)
 - [Tests and lint](#tests-and-lint)
 - [Consuming the substrate](#consuming-the-substrate)
 - [Feature folders](#feature-folders)
@@ -427,6 +428,24 @@ telemetry-opt-out profile, and an `owned_files` entry for
 installs one SDK per host. It ports the PowerShell reconciler's
 `DotnetSdkProvider`; full contract, the resolution table, and the molecule
 scenarios are in the [role README](roles/dotnet_sdk/README.md).
+
+### .NET global tools (dotnet_tools)
+
+[`roles/dotnet_tools`](roles/dotnet_tools/) is the nested global-tools half
+of the .NET toolchain (the SDK half is `dotnet_sdk`). Unlike the tarball
+roles it does **not** build on `toolchain_host_push`: a global tool is a
+NuGet package installed by the `dotnet tool` driver, so the role installs
+each desired `{id, version}` via an offline `dotnet tool install` from a
+pinned local source, symlinks the command shim into `/usr/local/bin`, and
+records a manifest for glob-free removal - mirroring the tarball roles'
+manifest-driven reconcile rather than delegating to it. Because every
+`dotnet tool` operation needs the SDK's `dotnet` driver, a consumer play
+installs it **after** the SDK and, on teardown, removes it **before** the
+SDK (tools removed first) - the Ansible expression of the parent/child
+teardown ordering the PowerShell children-walker guaranteed. It ports the
+reconciler's `DotnetToolsProvider`; full contract, the ordering rationale,
+and the molecule scenarios are in the
+[role README](roles/dotnet_tools/README.md).
 
 ## Tests and lint
 

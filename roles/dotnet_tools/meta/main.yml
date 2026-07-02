@@ -1,0 +1,27 @@
+---
+# Role metadata for the dotnet_tools role. Kept minimal - galaxy_info is
+# present so ansible-lint's role-metadata checks pass and the role is
+# self-describing without implying this repo publishes to Galaxy (it does
+# not; consumers take a sibling checkout - see the repo README "Consuming
+# the substrate").
+galaxy_info:
+  role_name: dotnet_tools
+  author: Infrastructure
+  description: >-
+    Install / swap / uninstall .NET global tools via the dotnet driver,
+    recording each install as a manifest for glob-free removal.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+
+# No meta dependency on dotnet_sdk. A meta dependency would run the SDK
+# role automatically, but the SDK is a SEPARATE reconcile with its own
+# desired set - the consumer play composes the two in the right order
+# (SDK present before tools install; tools uninstalled before the SDK on
+# teardown - see defaults/main.yml). Coupling them here would also break
+# the teardown ordering, since a meta dependency runs the dependency
+# BEFORE this role on every pass, including removal.
+dependencies: []

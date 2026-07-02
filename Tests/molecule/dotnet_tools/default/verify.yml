@@ -1,0 +1,81 @@
+---
+# Verify the post-converge state for the install direction. Idempotence
+# (re-run reports changed: 0) is checked by `molecule idempotence` in the
+# default sequence; this file asserts the state the install produced: the
+# .store slot, the /usr/local/bin command shim symlink, the manifest, and
+# that the symlinked command runs.
+
+- name: Verify - .NET global tool install post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    tool_id: dotnet-reportgenerator-globaltool
+    tool_version: "5.4.4"
+    command_name: reportgenerator
+    tools_root: /usr/local/share/dotnet/tools
+    manifest_path: >-
+      /var/lib/common-ansible/toolchains/manifests/dotnettool-dotnet-reportgenerator-globaltool-5.4.4.json
+  tasks:
+    # The driver placed the tool in its per-tool .store slot.
+    - name: Stat the tool's .store slot
+      ansible.builtin.stat:
+        path: "{{ tools_root }}/.store/{{ tool_id }}/{{ tool_version }}"
+      register: store_slot
+
+    - name: Assert the tool's .store slot exists
+      ansible.builtin.assert:
+        that:
+          - store_slot.stat.exists
+          - store_slot.stat.isdir
+        fail_msg: "tool .store slot missing: {{ store_slot.stat }}"
+
+    # A /usr/local/bin shim symlink pointing at the driver shim under the
+    # tools root - the non-login-shell PATH entry.
+    - name: Stat the /usr/local/bin command symlink
+      ansible.builtin.stat:
+        path: "/usr/local/bin/{{ command_name }}"
+      register: link
+
+    - name: Assert the command is symlinked to the tools-root shim
+      ansible.builtin.assert:
+        that:
+          - link.stat.islnk
+          - link.stat.lnk_target == tools_root ~ '/' ~ command_name
+        fail_msg: "/usr/local/bin/{{ command_name }} symlink is wrong: {{ link.stat }}"
+
+    # The symlinked command runs - proves pull -> install -> shim -> PATH
+    # end to end.
+    - name: Run the symlinked command
+      ansible.builtin.command: "{{ command_name }}"
+      changed_when: false
+      register: command_run
+
+    - name: Assert the command reports the fake-tool marker
+      ansible.builtin.assert:
+        that:
+          - "command_name ~ ' (fake tool)' in command_run.stdout"
+        fail_msg: "{{ command_name }} did not run as expected: {{ command_run.stdout }}"
+
+    # Manifest records the id, version, composite key, the shim symlink, and
+    # the command name.
+    - name: Slurp the tool manifest
+      ansible.builtin.slurp:
+        src: "{{ manifest_path }}"
+      register: manifest_raw
+
+    - name: Parse the manifest
+      ansible.builtin.set_fact:
+        manifest: "{{ manifest_raw.content | b64decode | from_json }}"
+
+    - name: Assert the manifest records the tool, symlink, and command
+      ansible.builtin.assert:
+        that:
+          - manifest.provider == 'dotnettool'
+          - manifest.id == tool_id
+          - manifest.version == tool_version
+          - manifest.key == tool_id ~ '@' ~ tool_version
+          - manifest.symlinks | length == 1
+          - manifest.symlinks[0].path == '/usr/local/bin/' ~ command_name
+          - manifest.symlinks[0].target == tools_root ~ '/' ~ command_name
+          - manifest.commands == [command_name]
+        fail_msg: "Manifest content is wrong: {{ manifest }}"

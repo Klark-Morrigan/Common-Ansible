@@ -1,0 +1,21 @@
+---
+# Converge - with the SDK installed by prepare, install the reportgenerator
+# global tool. The role pulls the fake .nupkg from the fixture, writes a
+# pinned NuGet.Config, runs the stub `dotnet tool install`, discovers the
+# new command shim, symlinks it into /usr/local/bin, and writes the manifest.
+#
+# include_role (not import_role) defers resolution to runtime so the
+# molecule.yml ANSIBLE_ROLES_PATH override is honoured.
+
+- name: Converge - install a .NET global tool
+  hosts: all
+  gather_facts: false
+  vars:
+    host_file_server_base_url: http://127.0.0.1:18841
+    dotnet_tools_tools:
+      - id: dotnet-reportgenerator-globaltool
+        version: "5.4.4"
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: dotnet_tools

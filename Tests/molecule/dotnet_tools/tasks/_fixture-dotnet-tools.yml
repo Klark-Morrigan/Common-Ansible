@@ -1,0 +1,207 @@
+---
+# Shared fixture bring-up for the dotnet_tools molecule scenarios. Included
+# from each scenario's prepare.yml. One in-container python http.server on
+# 127.0.0.1 stands in for BOTH:
+#   - the .NET release-metadata feed + fake SDK tarballs (so the real
+#     dotnet_sdk role resolves and installs a driver in prepare), and
+#   - the substrate host file server serving the tools' fake .nupkg packages
+#     (so this role's get_url reaches a real listener).
+#
+# The fake SDK tarball carries a tool-capable `dotnet` stub (not the bare
+# version-echo stub the dotnet_sdk scenarios use): it implements the
+# `tool install` / `tool uninstall` subcommands this role drives, against an
+# on-disk .store/ + /usr/local/bin shim layout, so no real .NET runtime is
+# needed in the container. That the driver, /etc/profile.d/dotnet.sh, and
+# the tools PATH are all wired by the genuine dotnet_sdk role keeps the two
+# roles' composition under test.
+#
+# Caller contract (play-level vars the includer must set):
+#   fixture_port        - tcp port the http server binds on 127.0.0.1.
+#                         Distinct per scenario so concurrent runs cannot
+#                         collide.
+#   fixture_stage_dir   - directory the http server serves from.
+#   fixture_build_dir   - scratch dir the tarball payloads are built in.
+#   fixture_api_prefix  - path prefix the feed is served under, e.g.
+#                         'dotnet/release-metadata'.
+#   fixture_channel     - the <major>.<minor> channel the feed is served for.
+#   fixture_latest_sdk  - the feed's 'latest-sdk' string.
+#   fixture_sdks        - list of SDKs to publish {version, archive}.
+#   fixture_tools       - list of tools whose .nupkg to stage {id, version};
+#                         served at
+#                         '<stage>/dotnet-tool-<id>-<version>.nupkg'.
+
+- name: Create the fixture build and stage directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ fixture_build_dir }}"
+    - "{{ fixture_stage_dir }}"
+    - "{{ fixture_stage_dir }}/{{ fixture_api_prefix }}/{{ fixture_channel }}"
+
+- name: Create each SDK's payload directory
+  ansible.builtin.file:
+    path: "{{ fixture_build_dir }}/dotnet-{{ item.version }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ fixture_sdks }}"
+  loop_control:
+    label: "{{ item.version }}"
+
+# The tool-capable `dotnet` stub. A bare invocation echoes the version (SDK
+# verify parity); `tool install`/`tool uninstall` maintain the .store/ +
+# /usr/local/bin shim layout the role reconciles against. Command names are
+# derived from the package id the way real global tools are named (strip a
+# leading 'dotnet-' and a trailing '-globaltool'), and recorded in the store
+# so uninstall knows which shim to remove without the driver present.
+- name: Stage the tool-capable dotnet stub in each payload
+  ansible.builtin.copy:
+    dest: "{{ fixture_build_dir }}/dotnet-{{ item.version }}/dotnet"
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      set -eu
+      sdk_version="{{ item.version }}"
+
+      if [ "$#" -eq 0 ]; then
+        echo "dotnet $sdk_version fixture"
+        exit 0
+      fi
+
+      if [ "$1" != "tool" ]; then
+        echo "fake dotnet: unsupported command '$1'" >&2
+        exit 64
+      fi
+
+      action="$2"
+      id="$3"
+      shift 3
+
+      tool_path=""
+      version=""
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --tool-path) tool_path="$2"; shift 2 ;;
+          --version) version="$2"; shift 2 ;;
+          --configfile) shift 2 ;;
+          *) shift ;;
+        esac
+      done
+
+      cmd=$(printf '%s' "$id" | sed 's/^dotnet-//; s/-globaltool$//')
+      # Match the real driver's per-tool .store/<id>/<version>/ slot the role
+      # records as the owned install dir.
+      id_store="$tool_path/.store/$id"
+
+      case "$action" in
+        install)
+          store="$id_store/$version"
+          mkdir -p "$store"
+          printf '%s\n' "$cmd" > "$store/commands"
+          printf '#!/bin/sh\necho "%s (fake tool)"\n' "$cmd" > "$tool_path/$cmd"
+          chmod 0755 "$tool_path/$cmd"
+          echo "You can invoke the tool using the following command: $cmd"
+          ;;
+        uninstall)
+          if [ ! -d "$id_store" ]; then
+            echo "fake dotnet: tool '$id' is not installed" >&2
+            exit 1
+          fi
+          for cf in "$id_store"/*/commands; do
+            [ -f "$cf" ] || continue
+            while IFS= read -r c; do
+              [ -n "$c" ] && rm -f "$tool_path/$c"
+            done < "$cf"
+          done
+          rm -rf "$id_store"
+          echo "Tool '$id' was successfully uninstalled."
+          ;;
+        *)
+          echo "fake dotnet: unsupported tool action '$action'" >&2
+          exit 64
+          ;;
+      esac
+  loop: "{{ fixture_sdks }}"
+  loop_control:
+    label: "{{ item.version }}"
+
+# tar the `dotnet` file directly (no wrapper dir kept in the archive) so the
+# archive root holds `dotnet` - the flat strip_components=0 shape the real
+# SDK tarball uses. `creates` makes the build idempotent.
+- name: Build a fake SDK tarball per version  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    argv:
+      - tar
+      - -C
+      - "{{ fixture_build_dir }}/dotnet-{{ item.version }}"
+      - -czf
+      - "{{ fixture_stage_dir }}/{{ item.archive }}"
+      - dotnet
+    creates: "{{ fixture_stage_dir }}/{{ item.archive }}"
+  loop: "{{ fixture_sdks }}"
+  loop_control:
+    label: "{{ item.version }}"
+
+# Fake tool packages. The fake driver never reads the .nupkg bytes, but the
+# role's get_url must reach a real file - so stage a placeholder under the
+# host-cache name the role pulls by.
+- name: Stage a fake .nupkg per tool
+  ansible.builtin.copy:
+    dest: >-
+      {{ fixture_stage_dir }}/dotnet-tool-{{ item.id }}-{{ item.version }}.nupkg
+    content: "fake-nupkg {{ item.id }} {{ item.version }}\n"
+    mode: "0644"
+  loop: "{{ fixture_tools | default([]) }}"
+  loop_control:
+    label: "{{ item.id }}@{{ item.version }}"
+
+# Build the releases.json payload: one release object per SDK, each with a
+# single-element sdks[] carrying the linux-x64 .tar.gz file. Only the fields
+# the resolver reads.
+- name: Compose each release object
+  ansible.builtin.set_fact:
+    fixture_releases_payload: "{{ fixture_releases_payload | default([]) + [release_obj] }}"
+  loop: "{{ fixture_sdks }}"
+  loop_control:
+    label: "{{ item.version }}"
+  vars:
+    release_obj:
+      sdks:
+        - version: "{{ item.version }}"
+          files:
+            - name: "{{ item.archive }}"
+              rid: linux-x64
+              url: "http://127.0.0.1:{{ fixture_port }}/{{ item.archive }}"
+              hash: "fixture-sha512-{{ item.version }}"
+
+- name: Write the canned releases.json feed
+  ansible.builtin.copy:
+    dest: >-
+      {{ fixture_stage_dir }}/{{ fixture_api_prefix }}/{{ fixture_channel }}/releases.json
+    content: "{{ feed | to_nice_json }}"
+    mode: "0644"
+  vars:
+    feed:
+      channel-version: "{{ fixture_channel }}"
+      latest-sdk: "{{ fixture_latest_sdk }}"
+      releases: "{{ fixture_releases_payload }}"
+
+# nohup + & detaches the listener so prepare can complete and converge can
+# proceed. Log redirection keeps the connection plugin's channel clean.
+- name: Start python http.server serving the staging directory
+  ansible.builtin.shell:
+    cmd: >-
+      nohup python3 -m http.server {{ fixture_port }}
+      --bind 127.0.0.1
+      --directory {{ fixture_stage_dir }}
+      >/var/log/dotnet-tools-fixture-http.log 2>&1 &
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+- name: Wait for the fixture http server to accept connections
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ fixture_port }}"
+    timeout: 10

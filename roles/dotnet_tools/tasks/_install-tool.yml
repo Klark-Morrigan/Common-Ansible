@@ -1,0 +1,202 @@
+---
+# Install one desired global tool (dotnet_tools_target = {id, version, key})
+# end to end, a port of DotnetToolsProvider.Install-Version:
+#   1. Stage the host-cached .nupkg into a per-tool dir alongside a
+#      NuGet.Config that pins that dir as the SOLE package source.
+#   2. `dotnet tool install <id> --tool-path <root> --configfile <cfg>`.
+#   3. Discover the command shim(s) the driver placed under <root> and
+#      symlink each into /usr/local/bin.
+#   4. Write the manifest LAST (crash-recovery anchor).
+#   5. Wipe the staging dir (best-effort).
+#
+# Only called for the `missing` set (main.yml), so every step is a first
+# install - no per-task "already present" guard is needed.
+
+- name: Set the per-tool install facts
+  ansible.builtin.set_fact:
+    # NuGet's V2 flat-layout filename ('<id-lower>.<version>.nupkg'); the
+    # SDK local-source enumerator matches packages by this pattern, so the
+    # staged copy must use it (not the host-cache name).
+    dotnet_tools_staged_leaf: >-
+      {{ dotnet_tools_target.id | lower }}.{{ dotnet_tools_target.version }}.nupkg
+    dotnet_tools_staging_dir: >-
+      {{ dotnet_tools_staging_base }}/{{ dotnet_tools_target.key }}
+    # The tool's slot in the driver-managed store. Recorded as the owned
+    # install dir; the uninstall frees it via `dotnet tool uninstall`, not
+    # an rm, so the driver can also rewrite its .store/.snapshot bookkeeping.
+    dotnet_tools_store_dir: >-
+      {{ dotnet_tools_root }}/.store/{{ dotnet_tools_target.id }}/{{ dotnet_tools_target.version }}
+    # Host-cache filename the acquisition/staging step (plan 5.5) serves the
+    # package under on the substrate file server.
+    dotnet_tools_archive: >-
+      dotnet-tool-{{ dotnet_tools_target.id }}-{{ dotnet_tools_target.version }}.nupkg
+    # Reset the per-tool symlink accumulator (the fact persists across
+    # include_tasks iterations otherwise and would leak a prior tool's links).
+    dotnet_tools_symlink_records: []
+
+- name: Ensure the per-tool staging directory exists
+  ansible.builtin.file:
+    path: "{{ dotnet_tools_staging_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+# Pull the .nupkg from the substrate host file server into the staging dir
+# under the NuGet flat-layout name. host_file_server_base_url is the
+# bridge-supplied listener (molecule points it at an in-container fixture).
+- name: Download the tool package from the host file server
+  ansible.builtin.get_url:
+    url: "{{ host_file_server_base_url }}/{{ dotnet_tools_archive }}"
+    dest: "{{ dotnet_tools_staging_dir }}/{{ dotnet_tools_staged_leaf }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+# NuGet.Config pinning the staging dir as the only source. <clear /> drops
+# any ambient nuget.org entry so `--configfile` (which means "use ONLY this
+# file's settings") leaves the resolver exactly one local source and it
+# never reaches out to api.nuget.org. Mirrors the PowerShell provider's
+# offline-install posture (host prefetches + verifies, VM consumes local).
+- name: Write the pinned NuGet.Config into the staging dir
+  ansible.builtin.copy:
+    dest: "{{ dotnet_tools_staging_dir }}/NuGet.Config"
+    content: |
+      <?xml version="1.0" encoding="utf-8"?>
+      <configuration>
+        <packageSources>
+          <clear />
+          <add key="local-staging" value="{{ dotnet_tools_staging_dir }}" />
+        </packageSources>
+      </configuration>
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+# Snapshot the tool-path shims BEFORE the install so the after-diff isolates
+# exactly the command name(s) THIS tool adds - the driver places one shim
+# file per command directly under <root>. A pre/post diff is layout-
+# independent (no parsing `dotnet tool list`, no peeking into .store/) and
+# per-tool correct even when other tools already have shims there.
+- name: Enumerate the tool-path shims before install
+  ansible.builtin.find:
+    paths: "{{ dotnet_tools_root }}"
+    file_type: file
+    recurse: false
+  become: true
+  register: dotnet_tools_shims_before
+
+# `dotnet tool install` is idempotent on the same version (a re-install of
+# the same id@version is a no-op error), so a re-provision recovers cleanly
+# from a mid-install crash. --configfile keeps the resolver offline.
+- name: Install the global tool
+  ansible.builtin.command:
+    argv:
+      - "{{ dotnet_tools_dotnet_bin }}"
+      - tool
+      - install
+      - "{{ dotnet_tools_target.id }}"
+      - --tool-path
+      - "{{ dotnet_tools_root }}"
+      - --configfile
+      - "{{ dotnet_tools_staging_dir }}/NuGet.Config"
+      - --version
+      - "{{ dotnet_tools_target.version }}"
+  become: true
+  changed_when: true
+
+- name: Enumerate the tool-path shims after install
+  ansible.builtin.find:
+    paths: "{{ dotnet_tools_root }}"
+    file_type: file
+    recurse: false
+  become: true
+  register: dotnet_tools_shims_after
+
+# The new shims (after minus before) are this tool's command binaries. Their
+# basenames are the command names the /usr/local/bin symlinks are created for.
+- name: Compute the command shims this tool added
+  ansible.builtin.set_fact:
+    dotnet_tools_new_shims: >-
+      {{ dotnet_tools_shims_after.files | map(attribute='path') | list
+         | difference(dotnet_tools_shims_before.files | map(attribute='path') | list) }}
+
+- name: Assert the install produced at least one command shim
+  ansible.builtin.assert:
+    that:
+      - dotnet_tools_new_shims | length > 0
+    fail_msg: >-
+      'dotnet tool install {{ dotnet_tools_target.key }}' added no command
+      shim under {{ dotnet_tools_root }}; nothing to symlink.
+
+# Non-login-shell PATH via /usr/local/bin (sshd command exec, systemd, cron
+# - none read /etc/profile.d). force: true retargets an existing link so a
+# version swap repoints it. Each link target is the driver shim under <root>
+# (the tool-path shim, NOT the executable inside .store/).
+- name: Create the /usr/local/bin shim symlinks
+  ansible.builtin.file:
+    src: "{{ item }}"
+    dest: "/usr/local/bin/{{ item | basename }}"
+    state: link
+    force: true
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  loop: "{{ dotnet_tools_new_shims }}"
+  loop_control:
+    label: "{{ item | basename }}"
+
+# Accumulate the {path, target} record for each shim symlink so the manifest
+# carries the exact links this install created (uninstall reads them back
+# verbatim - never a glob).
+- name: Record the shim symlink ownership entries for the manifest
+  ansible.builtin.set_fact:
+    dotnet_tools_symlink_records: >-
+      {{ dotnet_tools_symlink_records + [record] }}
+  loop: "{{ dotnet_tools_new_shims }}"
+  loop_control:
+    label: "{{ item | basename }}"
+  vars:
+    record:
+      path: "/usr/local/bin/{{ item | basename }}"
+      target: "{{ item }}"
+
+# Manifest LAST (crash recovery: a run that dies after install but before
+# the manifest exists leaves the tool as "not installed", and the next
+# reconcile re-runs this file cleanly - `dotnet tool install` is idempotent).
+# The filename composite '<id>-<version>' keeps it unique per tool even when
+# two tools share a NuGet version; id/version/key are explicit fields so the
+# reconcile reads them back without parsing the filename.
+- name: Write the tool manifest
+  ansible.builtin.copy:
+    dest: >-
+      {{ dotnet_tools_manifest_dir }}/dotnettool-{{
+      dotnet_tools_target.id }}-{{ dotnet_tools_target.version }}.json
+    content: "{{ dotnet_tools_manifest | to_nice_json }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  vars:
+    dotnet_tools_manifest:
+      schema_version: 1
+      provider: dotnettool
+      id: "{{ dotnet_tools_target.id }}"
+      version: "{{ dotnet_tools_target.version }}"
+      key: "{{ dotnet_tools_target.key }}"
+      install_dir: "{{ dotnet_tools_store_dir }}"
+      symlinks: "{{ dotnet_tools_symlink_records }}"
+      commands: "{{ dotnet_tools_new_shims | map('basename') | list }}"
+
+# Best-effort staging cleanup: the tool is installed and the manifest is
+# written, so a leftover staging dir is benign - log intent via a soft
+# removal rather than failing the install over it.
+- name: Wipe the per-tool staging directory
+  ansible.builtin.file:
+    path: "{{ dotnet_tools_staging_dir }}"
+    state: absent
+  become: true
