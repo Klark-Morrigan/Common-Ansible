@@ -1,0 +1,17 @@
+---
+# Converge - desire the empty set where prepare installed 21.0.1. With no
+# pins the resolve loop is empty (no API call), so the pattern receives an
+# empty desired set, finds 21.0.1 installed and stale, and removes it
+# entirely. host_file_server_base_url is unused here (nothing to install)
+# but set for contract clarity.
+
+- name: Converge - remove all JDKs (empty desired set)
+  hosts: all
+  gather_facts: false
+  vars:
+    host_file_server_base_url: http://127.0.0.1:18823
+    jdk_versions: []
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: jdk

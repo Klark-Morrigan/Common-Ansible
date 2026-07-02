@@ -1,0 +1,149 @@
+---
+# Shared fixture bring-up for the jdk molecule scenarios. Included from
+# each scenario's prepare.yml. One in-container python http.server on
+# 127.0.0.1 stands in for BOTH:
+#   - the Adoptium v3 API (a canned feature_releases GA response), and
+#   - the substrate host file server (the fake JDK tarballs).
+# So the role's resolve (ansible.builtin.uri) and its delegated install
+# (toolchain_host_push get_url) both reach a real listener without
+# touching api.adoptium.net or a host-side server (neither of which
+# exists on the molecule controller).
+#
+# Each fake JDK tarball carries a single wrapper dir jdk-<version>/bin/
+# with `java` and `javac` executable stubs, so the pattern's default
+# strip_components=1 lands bin/ at the install-dir root (the real Temurin
+# tarball shape) and symlink_bin_dir=bin has more than one launcher to
+# enumerate.
+#
+# Caller contract (play-level vars the includer must set):
+#   fixture_port         - tcp port the http server binds on 127.0.0.1.
+#                          Distinct per scenario so concurrent runs cannot
+#                          collide.
+#   fixture_stage_dir    - directory the http server serves from.
+#   fixture_build_dir    - scratch dir the tarball payloads are built in.
+#   fixture_api_prefix   - path prefix under which the API is served, e.g.
+#                          'adoptium/v3'; jdk_adoptium_api_base_url must be
+#                          http://127.0.0.1:<port>/<fixture_api_prefix>.
+#   fixture_major        - feature-release major the ga file is served for.
+#   fixture_releases     - list (DESC) of releases to publish. Each entry:
+#                          {version, minor, security, build, archive}.
+#                          `version` is the openjdk_version string.
+
+- name: Create the fixture build and stage directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ fixture_build_dir }}"
+    - "{{ fixture_stage_dir }}"
+    - "{{ fixture_stage_dir }}/{{ fixture_api_prefix }}/assets/feature_releases/{{ fixture_major }}"
+
+- name: Create each release's payload bin directory
+  ansible.builtin.file:
+    path: "{{ fixture_build_dir }}/jdk-{{ item.version }}/bin"
+    state: directory
+    mode: "0755"
+  loop: "{{ fixture_releases }}"
+  loop_control:
+    label: "{{ item.version }}"
+
+# `java` echoes its version so a scenario's verify can run the symlinked
+# binary and confirm the active version end to end; `javac` proves
+# symlink_bin_dir enumerated more than one launcher.
+- name: Stage the java stub in each payload
+  ansible.builtin.copy:
+    dest: "{{ fixture_build_dir }}/jdk-{{ item.version }}/bin/java"
+    content: |
+      #!/bin/sh
+      echo "jdk {{ item.version }} fixture"
+    mode: "0755"
+  loop: "{{ fixture_releases }}"
+  loop_control:
+    label: "{{ item.version }}"
+
+- name: Stage the javac stub in each payload
+  ansible.builtin.copy:
+    dest: "{{ fixture_build_dir }}/jdk-{{ item.version }}/bin/javac"
+    content: |
+      #!/bin/sh
+      echo "javac {{ item.version }} fixture"
+    mode: "0755"
+  loop: "{{ fixture_releases }}"
+  loop_control:
+    label: "{{ item.version }}"
+
+# tar -C <build> jdk-<version> keeps the wrapper dir as the archive root
+# (the strip_components=1 shape). `creates` makes the build idempotent
+# and satisfies no-changed-when; the wrapper-dir layout is exactly what
+# the archive module cannot pin, so the command form is right here.
+- name: Build a fake JDK tarball per release  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    argv:
+      - tar
+      - -C
+      - "{{ fixture_build_dir }}"
+      - -czf
+      - "{{ fixture_stage_dir }}/{{ item.archive }}"
+      - "jdk-{{ item.version }}"
+    creates: "{{ fixture_stage_dir }}/{{ item.archive }}"
+  loop: "{{ fixture_releases }}"
+  loop_control:
+    label: "{{ item.version }}"
+
+# Build the Adoptium GA response payload, one release object per entry in
+# DESC order - only the fields the resolver reads (version_data numeric
+# parts + openjdk_version, binaries[0].package.name/link/checksum).
+- name: Compose the canned Adoptium feature_releases payload
+  ansible.builtin.set_fact:
+    fixture_api_payload: "{{ fixture_api_payload | default([]) + [release_obj] }}"
+  loop: "{{ fixture_releases }}"
+  loop_control:
+    label: "{{ item.version }}"
+  vars:
+    release_obj:
+      release_name: "jdk-{{ item.version }}"
+      version_data:
+        major: "{{ fixture_major | int }}"
+        minor: "{{ item.minor | int }}"
+        security: "{{ item.security | int }}"
+        build: "{{ item.build | int }}"
+        openjdk_version: "{{ item.version }}"
+      binaries:
+        - architecture: x64
+          os: linux
+          image_type: jdk
+          package:
+            name: "{{ item.archive }}"
+            link: "http://127.0.0.1:{{ fixture_port }}/{{ item.archive }}"
+            checksum: "fixturechecksum-{{ item.version }}"
+
+# The request path is /<prefix>/assets/feature_releases/<major>/ga plus a
+# query string; python http.server strips the query and serves the file
+# named `ga` here verbatim.
+- name: Write the canned ga response file
+  ansible.builtin.copy:
+    dest: >-
+      {{ fixture_stage_dir }}/{{ fixture_api_prefix }}/assets/feature_releases/{{
+      fixture_major }}/ga
+    content: "{{ fixture_api_payload | to_nice_json }}"
+    mode: "0644"
+
+# nohup + & detaches the listener so prepare can complete and converge can
+# proceed. Log redirection keeps the connection plugin's channel clean.
+- name: Start python http.server serving the staging directory
+  ansible.builtin.shell:
+    cmd: >-
+      nohup python3 -m http.server {{ fixture_port }}
+      --bind 127.0.0.1
+      --directory {{ fixture_stage_dir }}
+      >/var/log/jdk-fixture-http.log 2>&1 &
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+- name: Wait for the fixture http server to accept connections
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ fixture_port }}"
+    timeout: 10

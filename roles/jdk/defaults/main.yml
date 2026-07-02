@@ -1,0 +1,57 @@
+---
+# Defaults and the input contract for the jdk role.
+#
+# This role is the first real consumer of the section-1 host-push
+# toolchain pattern (roles/toolchain_host_push). It adds ONE thing on top
+# of that pattern: resolving an operator's version pin (e.g. "21") against
+# the Adoptium (Eclipse Temurin) release API into a concrete
+# {resolved version, tarball name}, then delegating the install / swap /
+# uninstall mechanics to toolchain_host_push. It ports the PowerShell
+# reconciler's JdkProvider (Infrastructure-Vm-Provisioner up/jdk).
+#
+# Required input: none. With the defaults below and an empty jdk_versions
+# the role is a no-op that uninstalls any JDK the pattern has installed.
+#
+# jdk_versions - the desired JDK version pins. Each entry is a string in
+# one of the granularities the Adoptium resolver accepts:
+#
+#   "21"          newest GA of feature 21
+#   "21.0"        newest GA on the 21.0 line
+#   "21.0.5"      newest build of 21.0.5
+#   "21.0.5+11"   the exact 21.0.5+11 build
+#
+# Empty (the default) means "no JDK desired", which uninstalls every JDK
+# version the pattern currently has installed on the host - the same
+# set-difference removal toolchain_host_push gives every tool.
+#
+# v1 supports at most ONE JDK per host (a length > 1 list is a hard
+# error in tasks/main.yml). Multi-JDK coexistence would need per-version
+# JAVA_HOME / PATH wiring beyond the single /etc/profile.d/jdk.sh this
+# role writes; failing loud beats silently installing only the first.
+# This mirrors the PowerShell JdkProvider.Get-DesiredVersions cap.
+jdk_versions: []
+
+# The JDK vendor. Adoptium serves Eclipse Temurin only, so 'temurin' is
+# the sole supported value in v1; tasks/main.yml asserts it. Kept as an
+# explicit knob (rather than hardcoded) so the contract is visible and a
+# future vendor is a defaults change plus a resolver arm, not a rewrite.
+jdk_vendor: temurin
+
+# Base URL of the Adoptium v3 API the resolver queries. Overridable so a
+# molecule scenario can point it at an in-container fixture, or an estate
+# can front it with a caching mirror. The resolver appends
+# /assets/feature_releases/<major>/ga?... to this base.
+jdk_adoptium_api_base_url: https://api.adoptium.net/v3
+
+# Adoptium binary-selection query parameters. Defaulted to the only
+# combination this role installs (a 64-bit Linux JDK), exposed so an
+# aarch64 fleet is a var override rather than a fork.
+jdk_architecture: x64
+jdk_os: linux
+jdk_image_type: jdk
+
+# Install base for the JDK, forwarded to toolchain_host_push so the
+# install dir it creates (/opt/jdk-<version>) and the JAVA_HOME this role
+# writes into /etc/profile.d/jdk.sh stay in lockstep. Overridable, but
+# both sides must move together - so it is one var read twice, not two.
+jdk_install_base: /opt

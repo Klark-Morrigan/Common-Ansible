@@ -1,0 +1,35 @@
+---
+# Prepare the uninstall scenario: bring the fixture up and install
+# JDK 21.0.1. Converge then desires the empty set, so the pattern removes
+# it.
+
+- name: Prepare - fixture up, then install JDK 21.0.1
+  hosts: all
+  gather_facts: false
+  vars:
+    fixture_port: 18823
+    fixture_stage_dir: /var/lib/jdk-fixture/srv
+    fixture_build_dir: /var/lib/jdk-fixture/build
+    fixture_api_prefix: adoptium/v3
+    fixture_major: "21"
+    fixture_releases:
+      - version: "21.0.1+12"
+        minor: 0
+        security: 1
+        build: 12
+        archive: OpenJDK21U-jdk_x64_linux_hotspot_21.0.1_12.tar.gz
+    # Play-level so the shared (unprefixed) bridge var is not scoped to
+    # the include_role below (ansible-lint's no-role-prefix rule only
+    # fires on vars passed under a role task).
+    jdk_adoptium_api_base_url: http://127.0.0.1:18823/adoptium/v3
+    host_file_server_base_url: http://127.0.0.1:18823
+  tasks:
+    - name: Bring the fixture http server up
+      ansible.builtin.include_tasks: ../tasks/_fixture-adoptium.yml
+
+    - name: Install JDK 21.0.1 as the baseline to be removed
+      ansible.builtin.include_role:
+        name: jdk
+      vars:
+        jdk_versions:
+          - "21.0.1"

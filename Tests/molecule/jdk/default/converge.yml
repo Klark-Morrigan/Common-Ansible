@@ -1,0 +1,22 @@
+---
+# Converge - resolve the major-only pin "21" against the fixture API and
+# install it via the host-push pattern. The fixture serves one GA release
+# (21.0.2+13), so the resolver picks it, and toolchain_host_push extracts
+# to /opt/jdk-21.0.2+13, symlinks every bin/ launcher, and writes
+# /etc/profile.d/jdk.sh.
+#
+# include_role (not import_role) defers resolution to runtime so the
+# molecule.yml ANSIBLE_ROLES_PATH override is honoured.
+
+- name: Converge - install JDK 21
+  hosts: all
+  gather_facts: false
+  vars:
+    jdk_adoptium_api_base_url: http://127.0.0.1:18821/adoptium/v3
+    host_file_server_base_url: http://127.0.0.1:18821
+    jdk_versions:
+      - "21"
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: jdk

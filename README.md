@@ -19,6 +19,7 @@ was extended by the feature step that earned it.
 - [Bridge contract](#bridge-contract)
 - [Reusable roles](#reusable-roles)
   - [Host-push toolchain pattern (toolchain_host_push)](#host-push-toolchain-pattern-toolchain_host_push)
+  - [JDK (jdk)](#jdk-jdk)
 - [Tests and lint](#tests-and-lint)
 - [Consuming the substrate](#consuming-the-substrate)
 - [Feature folders](#feature-folders)
@@ -386,6 +387,25 @@ by hand. Install writes the manifest last and uninstall removes it last,
 so a crash mid-operation is self-healing. Full var contract, flow, and the
 molecule scenarios are documented in the
 [role README](roles/toolchain_host_push/README.md).
+
+The pattern supports two symlink modes per version: an explicit `symlinks`
+list, and `symlink_bin_dir` - a subdir whose files are all symlinked into
+`/usr/local/bin`, enumerated at install time (for tools like the JDK whose
+launcher set is only known post-extraction). Both record every link in the
+manifest, so uninstall stays glob-free.
+
+### JDK (jdk)
+
+[`roles/jdk`](roles/jdk/) is the first real consumer of the host-push
+pattern. It adds **only** Adoptium (Eclipse Temurin) version-pin
+resolution: an operator pin (`21`, `21.0`, `21.0.5`, or `21.0.5+11`)
+resolves against the Adoptium v3 API into a concrete
+`{version, tarball name}`, and the install / version-swap / uninstall
+mechanics delegate to `toolchain_host_push` (`symlink_bin_dir: bin` links
+every JDK launcher, and a `JAVA_HOME` + `PATH` profile is written). v1
+installs one JDK per host. It ports the PowerShell reconciler's
+`JdkProvider`; full contract, the resolution table, and the molecule
+scenarios are in the [role README](roles/jdk/README.md).
 
 ## Tests and lint
 
