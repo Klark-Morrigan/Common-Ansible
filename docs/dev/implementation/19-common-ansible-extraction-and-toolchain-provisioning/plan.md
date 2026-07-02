@@ -916,11 +916,6 @@ tarball + install.sh).
   `toolchain_apt` role README's use list, or a short note where the
   section-2 roles are described).
 
-```mermaid
-flowchart LR
-  CFG[section-2 entry: bats] --> INST[apt or tarball+install.sh] --> BIN[/usr/local/bin/bats/]
-```
-
 ## Section 8 - docker role
 
 Bucket D, section-3 (daemon).
