@@ -654,13 +654,34 @@ flowchart TD
 
 ### Step 5.2 - jdk role
 
-Port `JdkProvider` (Adoptium resolve + install/uninstall) onto 5.1.
+Port `JdkProvider` onto 5.1. The role adds only resolve/version logic: it
+translates an operator pin (`21`, `21.0`, `21.0.5`, `21.0.5+11`) against
+the Adoptium v3 GA API into a concrete `{version, archive}` (also
+capturing the release checksum and download URL), then delegates install
+/ swap / uninstall to the 5.1 pattern - `symlink_bin_dir: bin` to link
+every JDK launcher, plus a `JAVA_HOME` + `PATH` profile. v1 installs one
+JDK per host (a longer desired list is a hard error, mirroring
+`Get-JdkDesiredVersions`). The Adoptium metadata query runs on the target
+(only the large tarball uses the file-server NAT-bypass), so a fleet whose
+targets cannot reach `api.adoptium.net` overrides the API base at a mirror.
+
+The role does **not** verify the tarball checksum at install: it pulls
+from the trusted substrate file server, and Adoptium byte-integrity is the
+concern of the acquisition/staging step that fetches the tarball from
+Adoptium and stages it on that file server ([Step 5.5](#step-55---toolchain-targeting-flow-in-a-consumer-repo)).
+This is the same acquire/install split the PowerShell reconciler drew -
+`Invoke-JdkAcquisition` verified the hash, `Install-JdkVersion` only
+extracted. The resolver surfaces the checksum precisely so the staging
+layer has it.
 
 - **Reason:** First real consumer of the section-1 pattern; proves parity
   with the reconciler.
-- **Tests:** molecule - install a pinned JDK, swap versions, uninstall.
-- **README:** `jdk` role README (purpose, variables, the Adoptium
-  resolve/install behaviour it adds on the 5.1 pattern).
+- **Tests:** molecule - install a pinned JDK, swap versions, uninstall,
+  each driven by an in-container fixture serving both a canned Adoptium
+  response and the fake tarballs (so resolve and install run end to end
+  without the real API).
+- **README:** `jdk` role README (purpose, variables, the resolution
+  granularity table, and where checksum verification lives).
 
 ```mermaid
 flowchart LR
@@ -705,21 +726,40 @@ or the runner owner), never in Common-Ansible, to keep the substrate
 naming honest (see
 [Why Common-, not Infrastructure-](problem.md#why-common--not-infrastructure)).
 
+This step also owns **acquisition and staging**: fetching each resolved
+toolchain tarball from upstream (Adoptium for the JDK), verifying the
+release checksum the role surfaced, and staging it on the substrate host
+file server under the resolved archive name the role pulls by. The roles
+(5.1-5.4) deliberately do not re-verify at install (they pull from the
+trusted file server) - staging is the integrity gate, the acquire/install
+split the PowerShell reconciler drew. Staging must pin the resolution it
+stages so the role's install-time resolve cannot pick a newer Adoptium
+build than the one staged (the role re-resolves on the target); the
+PowerShell reconciler pinned this via a per-cache lockfile, and the
+consumer flow needs the equivalent pin here.
+
 - **Reason:** Separates "reusable roles" (substrate) from "who gets what
-  on which box" (a deploying consumer).
+  on which box" (a deploying consumer), and puts upstream fetch +
+  integrity verification with the consumer that owns the estate's egress.
 - **Tests:** Integration - run the flow against a disposable VM and assert
-  the toolchain is present and on PATH.
+  the toolchain is present and on PATH; a tampered/mismatched checksum
+  fails staging before anything reaches the VM.
 - **README:** Document the toolchain targeting flow (playbook +
-  inventory) in the consumer repo's README; this repo's README only
-  references the reusable roles it consumes.
+  inventory) and the acquire-verify-stage step in the consumer repo's
+  README; this repo's README only references the reusable roles it
+  consumes.
 
 ```mermaid
 flowchart LR
   subgraph CON[consumer repo]
+    ACQ[acquire + verify checksum + stage]
     PB[toolchain playbook + inventory]
   end
+  UP[(Adoptium / upstream)] --> ACQ
+  ACQ -->|staged tarball| HFS[(substrate host file server)]
   PB --> JR[jdk role]
   PB --> DR[dotnet roles]
+  JR -->|pull by name| HFS
   JR --> CA[(Common-Ansible substrate)]
   DR --> CA
 ```
