@@ -1,0 +1,38 @@
+---
+# Prepare the container for the version-swap scenario: bring the fixture
+# server up serving BOTH 1.0.0 and 2.0.0, then install 1.0.0 by applying
+# the role. Converge then swaps the desired set to 2.0.0.
+
+- name: Prepare - fixture fileserver up, then install faketool 1.0.0
+  hosts: all
+  gather_facts: false
+  vars:
+    fixture_port: 18812
+    fixture_tool: faketool
+    fixture_versions:
+      - "1.0.0"
+      - "2.0.0"
+    fixture_stage_dir: /var/lib/toolchain-fixture/srv
+    fixture_build_dir: /var/lib/toolchain-fixture/build
+    # Play-level so the shared (unprefixed) bridge var is not scoped to
+    # the include_role below (ansible-lint's no-role-prefix rule only
+    # fires on vars passed under a role task).
+    host_file_server_base_url: http://127.0.0.1:18812
+  tasks:
+    - name: Bring the fixture http server up (serves 1.0.0 and 2.0.0)
+      ansible.builtin.include_tasks: ../tasks/_fixture-fileserver.yml
+
+    - name: Install faketool 1.0.0 as the pre-swap baseline
+      ansible.builtin.include_role:
+        name: toolchain_host_push
+      vars:
+        toolchain_host_push_name: faketool
+        toolchain_host_push_versions:
+          - version: "1.0.0"
+            archive: faketool-1.0.0.tar.gz
+            symlinks:
+              - name: faketool
+                source: bin/faketool
+            profile: |
+              export FAKETOOL_HOME=/opt/faketool-1.0.0
+              export PATH="$FAKETOOL_HOME/bin:$PATH"

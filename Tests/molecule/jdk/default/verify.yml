@@ -1,0 +1,105 @@
+---
+# Verify the post-converge state for the install direction. Idempotence
+# (re-run reports changed: 0) is checked by `molecule idempotence` in the
+# default sequence; this file asserts the state the install produced,
+# including that symlink_bin_dir enumerated MORE THAN ONE launcher.
+
+- name: Verify - JDK 21.0.2+13 install post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    resolved_version: "21.0.2+13"
+    install_dir: /opt/jdk-21.0.2+13
+    manifest_path: /var/lib/common-ansible/toolchains/manifests/jdk-21.0.2+13.json
+  tasks:
+    # strip_components=1 must have landed bin/ at the install-dir root.
+    - name: Stat the extracted launchers
+      ansible.builtin.stat:
+        path: "{{ install_dir }}/bin/{{ item }}"
+      register: extracted
+      loop:
+        - java
+        - javac
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Assert both launchers extracted to the versioned install dir
+      ansible.builtin.assert:
+        that:
+          - (extracted.results | map(attribute='stat.exists') | list) == [true, true]
+          - (extracted.results | map(attribute='stat.executable') | list) == [true, true]
+        fail_msg: >-
+          A launcher is missing or not executable under {{ install_dir }}/bin:
+          {{ extracted.results | map(attribute='stat') | list }}
+
+    # symlink_bin_dir=bin must have linked BOTH launchers into
+    # /usr/local/bin, each pointing at the install dir.
+    - name: Stat the /usr/local/bin symlinks
+      ansible.builtin.stat:
+        path: "/usr/local/bin/{{ item }}"
+      register: links
+      loop:
+        - java
+        - javac
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Assert both launchers are symlinked to the install dir
+      ansible.builtin.assert:
+        that:
+          - links.results[0].stat.islnk
+          - links.results[0].stat.lnk_target == install_dir ~ '/bin/java'
+          - links.results[1].stat.islnk
+          - links.results[1].stat.lnk_target == install_dir ~ '/bin/javac'
+        fail_msg: >-
+          /usr/local/bin java/javac symlinks are wrong:
+          {{ links.results | map(attribute='stat') | list }}
+
+    # The symlinked java runs and reports the resolved version - proves
+    # resolve -> extract -> symlink -> PATH end to end.
+    - name: Run the symlinked java
+      ansible.builtin.command: java
+      changed_when: false
+      register: java_run
+
+    - name: Assert java reports the resolved version
+      ansible.builtin.assert:
+        that:
+          - "'jdk ' ~ resolved_version ~ ' fixture' in java_run.stdout"
+        fail_msg: "java did not report {{ resolved_version }}: {{ java_run.stdout }}"
+
+    # profile.d wires JAVA_HOME at the resolved install dir.
+    - name: Slurp the profile.d script
+      ansible.builtin.slurp:
+        src: /etc/profile.d/jdk.sh
+      register: profile_script
+
+    - name: Assert the profile.d script wires JAVA_HOME
+      ansible.builtin.assert:
+        that:
+          - "'JAVA_HOME=' ~ install_dir in (profile_script.content | b64decode)"
+        fail_msg: >-
+          /etc/profile.d/jdk.sh does not wire JAVA_HOME at {{ install_dir }}:
+          {{ profile_script.content | b64decode }}
+
+    # Manifest records the resolved version and BOTH owned symlinks.
+    - name: Slurp the version manifest
+      ansible.builtin.slurp:
+        src: "{{ manifest_path }}"
+      register: manifest_raw
+
+    - name: Parse the manifest
+      ansible.builtin.set_fact:
+        manifest: "{{ manifest_raw.content | b64decode | from_json }}"
+
+    - name: Assert the manifest records the version and both launcher symlinks
+      ansible.builtin.assert:
+        that:
+          - manifest.version == resolved_version
+          - manifest.name == 'jdk'
+          - manifest.install_dir == install_dir
+          - manifest.profile_script == 'jdk'
+          - manifest.symlinks | length == 2
+          - (manifest.symlinks | map(attribute='path') | sort)
+            == ['/usr/local/bin/java', '/usr/local/bin/javac']
+        fail_msg: "Manifest content is wrong: {{ manifest }}"

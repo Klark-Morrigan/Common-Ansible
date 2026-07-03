@@ -1,0 +1,68 @@
+---
+# Uninstall one tool no longer desired (dotnet_tools_stale_entry - a parsed
+# manifest dict). Mirror of the install file, inverted, a port of
+# DotnetToolsProvider.Uninstall-Version driven entirely by what the manifest
+# recorded this tool owns:
+#   1. Remove the recorded /usr/local/bin shim symlinks (exactly the recorded
+#      paths - never a glob).
+#   2. `dotnet tool uninstall <id> --tool-path <root>` to free the .store
+#      slot. This REQUIRES the dotnet driver present, which is why a teardown
+#      play runs this role BEFORE dotnet_sdk (defaults/main.yml, README): if
+#      the SDK were removed first the driver would be gone and the store
+#      would leak. Non-zero is logged, not fatal, so a stale slot (manifest
+#      present, store already gone) does not block manifest removal -
+#      mirroring the PowerShell provider's log-and-continue.
+#   3. Remove the manifest LAST - the recovery anchor: until it is gone the
+#      next reconcile can replay this teardown, so a crash mid-removal is
+#      self-healing.
+#
+# The role does NOT rm the .store/ dir directly: the driver owns that slot
+# (it also rewrites .store/.snapshot bookkeeping), so `dotnet tool uninstall`
+# is the supported way to free it - the same boundary the PowerShell provider
+# drew.
+
+- name: Remove the recorded /usr/local/bin shim symlinks
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  become: true
+  loop: "{{ dotnet_tools_stale_entry.symlinks | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+# failed_when: false so an already-freed slot (driver reports "not
+# installed", exit non-zero) does not abort the reconcile - the load-bearing
+# cleanup is the symlink + manifest removal; this step only frees the store.
+# The message text is not reliably discriminable across driver versions, so
+# a blanket log-and-continue is the safer posture (as in the PowerShell port).
+- name: Uninstall the global tool via the dotnet driver
+  ansible.builtin.command:
+    argv:
+      - "{{ dotnet_tools_dotnet_bin }}"
+      - tool
+      - uninstall
+      - "{{ dotnet_tools_stale_entry.id }}"
+      - --tool-path
+      - "{{ dotnet_tools_root }}"
+  become: true
+  register: dotnet_tools_uninstall_result
+  changed_when: dotnet_tools_uninstall_result.rc == 0
+  failed_when: false
+
+- name: Warn if the driver uninstall returned non-zero
+  ansible.builtin.debug:
+    msg: >-
+      'dotnet tool uninstall {{ dotnet_tools_stale_entry.id }}' returned exit
+      {{ dotnet_tools_uninstall_result.rc }}; continuing with manifest
+      removal. stderr: {{ dotnet_tools_uninstall_result.stderr | default('') }}
+  when: dotnet_tools_uninstall_result.rc != 0
+
+# Manifest path is deterministic from id + version, so it need not be carried
+# on the parsed record separately. Removed LAST (see file header).
+- name: Remove the tool manifest
+  ansible.builtin.file:
+    path: >-
+      {{ dotnet_tools_manifest_dir }}/dotnettool-{{
+      dotnet_tools_stale_entry.id }}-{{ dotnet_tools_stale_entry.version }}.json
+    state: absent
+  become: true

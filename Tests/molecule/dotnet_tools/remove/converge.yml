@@ -1,0 +1,25 @@
+---
+# Converge - desire the empty set for BOTH toolchains, in teardown order:
+# dotnet_tools FIRST (so `dotnet tool uninstall` runs while the driver is
+# still present), then dotnet_sdk (which removes the driver). This is the
+# consumer-play expression of the parent/child teardown ordering: tools are
+# removed before the SDK. Reversing these two tasks would break the tool
+# uninstall (no driver) and leak its .store slot - which the verify catches.
+
+- name: Converge - remove the tool, then the SDK (teardown order)
+  hosts: all
+  gather_facts: false
+  vars:
+    host_file_server_base_url: http://127.0.0.1:18842
+  tasks:
+    - name: Remove all global tools (empty desired set) - BEFORE the SDK
+      ansible.builtin.include_role:
+        name: dotnet_tools
+      vars:
+        dotnet_tools_tools: []
+
+    - name: Remove all .NET SDKs (empty desired set) - AFTER the tools
+      ansible.builtin.include_role:
+        name: dotnet_sdk
+      vars:
+        dotnet_sdk_versions: []

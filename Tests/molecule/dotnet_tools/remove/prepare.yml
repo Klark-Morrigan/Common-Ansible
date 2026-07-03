@@ -1,0 +1,44 @@
+---
+# Prepare the teardown-ordering scenario: fixture up, then install the SDK
+# and the reportgenerator tool as the baseline to be removed. The SDK is
+# installed first (the driver must exist before the tool installs).
+
+- name: Prepare - fixture up, then install the SDK and a global tool
+  hosts: all
+  gather_facts: false
+  vars:
+    fixture_port: 18842
+    fixture_stage_dir: /var/lib/dotnet-tools-fixture/srv
+    fixture_build_dir: /var/lib/dotnet-tools-fixture/build
+    fixture_api_prefix: dotnet/release-metadata
+    fixture_channel: "10.0"
+    fixture_latest_sdk: "10.0.100"
+    fixture_sdks:
+      - version: "10.0.100"
+        archive: dotnet-sdk-10.0.100-linux-x64.tar.gz
+    fixture_tools:
+      - id: dotnet-reportgenerator-globaltool
+        version: "5.4.4"
+    # Play-level so the shared (unprefixed) bridge var is not scoped to the
+    # include_role tasks below.
+    dotnet_sdk_releases_base_url: http://127.0.0.1:18842/dotnet/release-metadata
+    host_file_server_base_url: http://127.0.0.1:18842
+  tasks:
+    - name: Bring the fixture http server up
+      ansible.builtin.include_tasks: ../tasks/_fixture-dotnet-tools.yml
+
+    - name: Install the .NET SDK baseline
+      ansible.builtin.include_role:
+        name: dotnet_sdk
+      vars:
+        dotnet_sdk_versions:
+          - channel: "10.0"
+            version: "10.0.100"
+
+    - name: Install the global tool baseline
+      ansible.builtin.include_role:
+        name: dotnet_tools
+      vars:
+        dotnet_tools_tools:
+          - id: dotnet-reportgenerator-globaltool
+            version: "5.4.4"

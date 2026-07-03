@@ -1,0 +1,83 @@
+---
+# jdk role entry point. The role adds only resolve/version logic on top
+# of the section-1 host-push pattern (roles/toolchain_host_push):
+#   1. Validate the vendor and the v1 single-JDK cap.
+#   2. Resolve each version pin against the Adoptium API into a concrete
+#      {version, archive} (tasks/_resolve-adoptium-release.yml).
+#   3. Compose the toolchain_host_push desired set from the resolved
+#      releases and delegate install / swap / uninstall to that role.
+#
+# An empty jdk_versions resolves to an empty desired set, so the pattern
+# uninstalls every JDK it has installed - the same set-difference removal
+# it gives every tool. No API call is made in that case (the loop is
+# empty), so an uninstall-only run needs no Adoptium reachability.
+
+# Adoptium serves Eclipse Temurin only; any other vendor cannot be
+# resolved against this API. Fail loud rather than silently install a
+# Temurin build under a mislabelled vendor.
+- name: Assert the JDK vendor is supported
+  ansible.builtin.assert:
+    that:
+      - jdk_vendor == 'temurin'
+    fail_msg: >-
+      jdk_vendor '{{ jdk_vendor }}' is not supported; v1 resolves Eclipse
+      Temurin via the Adoptium API only ('temurin').
+
+# v1 hard cap - see defaults/main.yml for why one JDK per host. The
+# message names the observed count so an operator editing the list does
+# not have to recount it.
+- name: Assert at most one JDK version is desired
+  ansible.builtin.assert:
+    that:
+      - jdk_versions | length <= 1
+    fail_msg: >-
+      jdk_versions supports one JDK per host in v1; got
+      {{ jdk_versions | length }} entries.
+
+# Seed the accumulator the resolver appends to (one resolved release per
+# pin). Kept as a list so the compose step below and toolchain_host_push
+# both work against the same list shape a multi-JDK v2 would use.
+- name: Initialise the resolved-versions accumulator
+  ansible.builtin.set_fact:
+    jdk_resolved_versions: []
+
+- name: Resolve each desired version pin against Adoptium
+  ansible.builtin.include_tasks: _resolve-adoptium-release.yml
+  loop: "{{ jdk_versions }}"
+  loop_control:
+    loop_var: jdk_pin
+    label: "{{ jdk_pin }}"
+
+# Compose the host-push desired set, one entry per resolved release.
+# `symlink_bin_dir: bin` tells the pattern to symlink every JDK launcher
+# (java, javac, jar, keytool, ...) under the extracted bin/ into
+# /usr/local/bin - the set is only known post-extraction, so the pattern
+# enumerates it. The profile wires JAVA_HOME + PATH for login shells;
+# JAVA_HOME must equal the pattern's install dir
+# (jdk_install_base/jdk-<version>), so both read jdk_install_base. Built
+# in a loop because each entry's profile references that entry's own
+# version. Single-quoted export values stay literal in the written .sh so
+# the login shell expands $JAVA_HOME/$PATH, not this play.
+- name: Build the host-push desired set from the resolved releases
+  ansible.builtin.set_fact:
+    jdk_final_versions: "{{ jdk_final_versions | default([]) + [entry] }}"
+  loop: "{{ jdk_resolved_versions }}"
+  loop_control:
+    loop_var: jdk_resolved
+    label: "{{ jdk_resolved.version }}"
+  vars:
+    entry:
+      version: "{{ jdk_resolved.version }}"
+      archive: "{{ jdk_resolved.archive }}"
+      symlink_bin_dir: bin
+      profile: |
+        export JAVA_HOME={{ jdk_install_base }}/jdk-{{ jdk_resolved.version }}
+        export PATH="$JAVA_HOME/bin:$PATH"
+
+- name: Reconcile the JDK via the host-push toolchain pattern
+  ansible.builtin.include_role:
+    name: toolchain_host_push
+  vars:
+    toolchain_host_push_name: jdk
+    toolchain_host_push_install_base: "{{ jdk_install_base }}"
+    toolchain_host_push_versions: "{{ jdk_final_versions | default([]) }}"

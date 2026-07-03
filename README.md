@@ -17,6 +17,11 @@ was extended by the feature step that earned it.
   - [Troubleshooting: WSL default distro has no bash](#troubleshooting-wsl-default-distro-has-no-bash)
   - [Troubleshooting: capturing logs and re-running an interrupted bootstrap](#troubleshooting-capturing-logs-and-re-running-an-interrupted-bootstrap)
 - [Bridge contract](#bridge-contract)
+- [Reusable roles](#reusable-roles)
+  - [Host-push toolchain pattern (toolchain_host_push)](#host-push-toolchain-pattern-toolchain_host_push)
+  - [JDK (jdk)](#jdk-jdk)
+  - [.NET SDK (dotnet_sdk)](#net-sdk-dotnet_sdk)
+  - [.NET global tools (dotnet_tools)](#net-global-tools-dotnet_tools)
 - [Tests and lint](#tests-and-lint)
 - [Consuming the substrate](#consuming-the-substrate)
 - [Feature folders](#feature-folders)
@@ -354,6 +359,93 @@ host-file-server PowerShell helpers are covered by
 PowerShell calling `HttpListener` or `Get-NetIPAddress`; mocking
 those from bats would require a `pwsh.exe` round-trip per assertion.
 The end-to-end smoke against a real VM is captured in the feature plan.
+
+## Reusable roles
+
+The substrate ships reusable roles under [`roles/`](roles/), consumed by
+their short name once `<root>/roles` is on `ANSIBLE_ROLES_PATH` (see
+[Consuming the substrate](#consuming-the-substrate)). Roles read the
+extra-vars and inventory the bridge composes and are not standalone.
+
+### Host-push toolchain pattern (toolchain_host_push)
+
+[`roles/toolchain_host_push`](roles/toolchain_host_push/) is the shared
+**section-1** ("host-prefetched, pushed") toolchain mechanism: it pulls a
+host-staged tarball via the substrate host file server, extracts it to a
+versioned install dir (`/opt/<tool>-<version>`), wires `/usr/local/bin`
+symlinks and an `/etc/profile.d/<tool>.sh` script, records each install as
+a manifest, and removes versions no longer desired (the one capability
+Ansible does not give for free - a set-difference uninstall). It ports the
+PowerShell toolchain reconciler's model
+(`Infrastructure-Vm-Provisioner` `up/reconciler`) so the later `jdk` /
+`dotnet_sdk` roles differ only in their resolve/version logic and delegate
+the mechanics here.
+
+The record model is deliberately **manifest-per-version**, not an
+`/opt/<tool>-*` directory glob: the manifest records the exact install
+dir, symlinks, and profile script the install created, so uninstall undoes
+precisely that instead of racing a glob against whatever an operator added
+by hand. Install writes the manifest last and uninstall removes it last,
+so a crash mid-operation is self-healing. Full var contract, flow, and the
+molecule scenarios are documented in the
+[role README](roles/toolchain_host_push/README.md).
+
+The pattern supports two symlink modes per version: an explicit `symlinks`
+list, and `symlink_bin_dir` - a subdir whose files are all symlinked into
+`/usr/local/bin`, enumerated at install time (for tools like the JDK whose
+launcher set is only known post-extraction). Both record every link in the
+manifest, so uninstall stays glob-free. A per-version `owned_files` list is
+the generic escape hatch for a tool that needs a fixed config file *outside*
+its install dir (e.g. .NET's `/etc/dotnet/install_location`): the pattern
+writes it at install and removes it on uninstall, recording the path in the
+manifest so removal stays glob-free too.
+
+### JDK (jdk)
+
+[`roles/jdk`](roles/jdk/) is the first real consumer of the host-push
+pattern. It adds **only** Adoptium (Eclipse Temurin) version-pin
+resolution: an operator pin (`21`, `21.0`, `21.0.5`, or `21.0.5+11`)
+resolves against the Adoptium v3 API into a concrete
+`{version, tarball name}`, and the install / version-swap / uninstall
+mechanics delegate to `toolchain_host_push` (`symlink_bin_dir: bin` links
+every JDK launcher, and a `JAVA_HOME` + `PATH` profile is written). v1
+installs one JDK per host. It ports the PowerShell reconciler's
+`JdkProvider`; full contract, the resolution table, and the molecule
+scenarios are in the [role README](roles/jdk/README.md).
+
+### .NET SDK (dotnet_sdk)
+
+[`roles/dotnet_sdk`](roles/dotnet_sdk/) is the second real consumer of the
+host-push pattern. It adds **only** .NET release-feed resolution: an
+operator `{channel, version}` pin (channel `10.0`; version `10`, `10.0`, or
+`10.0.100`) resolves against Microsoft's per-channel `releases.json` into a
+concrete `{version, tarball name}`, and the install / version-swap /
+uninstall mechanics delegate to `toolchain_host_push`. The .NET specifics
+it composes onto the pattern are a flat extract (`strip_components: 0`), a
+single `dotnet` driver symlink, a `DOTNET_ROOT` + tools-PATH +
+telemetry-opt-out profile, and an `owned_files` entry for
+`/etc/dotnet/install_location` (the non-login-shell runtime hint). v1
+installs one SDK per host. It ports the PowerShell reconciler's
+`DotnetSdkProvider`; full contract, the resolution table, and the molecule
+scenarios are in the [role README](roles/dotnet_sdk/README.md).
+
+### .NET global tools (dotnet_tools)
+
+[`roles/dotnet_tools`](roles/dotnet_tools/) is the nested global-tools half
+of the .NET toolchain (the SDK half is `dotnet_sdk`). Unlike the tarball
+roles it does **not** build on `toolchain_host_push`: a global tool is a
+NuGet package installed by the `dotnet tool` driver, so the role installs
+each desired `{id, version}` via an offline `dotnet tool install` from a
+pinned local source, symlinks the command shim into `/usr/local/bin`, and
+records a manifest for glob-free removal - mirroring the tarball roles'
+manifest-driven reconcile rather than delegating to it. Because every
+`dotnet tool` operation needs the SDK's `dotnet` driver, a consumer play
+installs it **after** the SDK and, on teardown, removes it **before** the
+SDK (tools removed first) - the Ansible expression of the parent/child
+teardown ordering the PowerShell children-walker guaranteed. It ports the
+reconciler's `DotnetToolsProvider`; full contract, the ordering rationale,
+and the molecule scenarios are in the
+[role README](roles/dotnet_tools/README.md).
 
 ## Tests and lint
 

@@ -1,0 +1,18 @@
+---
+# Prepare the container for the default scenario: bring the fixture http
+# server up serving a single fake tool version (1.0.0). The converge then
+# installs it; molecule idempotence re-runs converge to prove the no-op.
+
+- name: Prepare - bring the fixture fileserver up
+  hosts: all
+  gather_facts: false
+  vars:
+    fixture_port: 18811
+    fixture_tool: faketool
+    fixture_versions:
+      - "1.0.0"
+    fixture_stage_dir: /var/lib/toolchain-fixture/srv
+    fixture_build_dir: /var/lib/toolchain-fixture/build
+  tasks:
+    - name: Bring the fixture http server up
+      ansible.builtin.include_tasks: ../tasks/_fixture-fileserver.yml

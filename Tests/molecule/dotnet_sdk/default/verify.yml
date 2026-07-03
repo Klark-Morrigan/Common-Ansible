@@ -1,0 +1,112 @@
+---
+# Verify the post-converge state for the install direction. Idempotence
+# (re-run reports changed: 0) is checked by `molecule idempotence` in the
+# default sequence; this file asserts the state the install produced,
+# including the .NET-specific artefacts the owned_files mechanism and the
+# profile wiring add over a bare host-push install.
+
+- name: Verify - .NET SDK 10.0.100 install post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    resolved_version: "10.0.100"
+    install_dir: /opt/dotnet-10.0.100
+    manifest_path: /var/lib/common-ansible/toolchains/manifests/dotnet-10.0.100.json
+  tasks:
+    # strip_components=0 must have landed the flat `dotnet` driver at the
+    # install-dir root (no wrapper dir, unlike the JDK).
+    - name: Stat the extracted dotnet driver
+      ansible.builtin.stat:
+        path: "{{ install_dir }}/dotnet"
+      register: extracted
+
+    - name: Assert the dotnet driver extracted to the versioned install dir
+      ansible.builtin.assert:
+        that:
+          - extracted.stat.exists
+          - extracted.stat.executable
+        fail_msg: >-
+          dotnet is missing or not executable under {{ install_dir }}:
+          {{ extracted.stat }}
+
+    # A single /usr/local/bin/dotnet symlink (every SDK tool dispatches
+    # through the driver, so no per-launcher enumeration).
+    - name: Stat the /usr/local/bin/dotnet symlink
+      ansible.builtin.stat:
+        path: /usr/local/bin/dotnet
+      register: link
+
+    - name: Assert dotnet is symlinked to the install dir
+      ansible.builtin.assert:
+        that:
+          - link.stat.islnk
+          - link.stat.lnk_target == install_dir ~ '/dotnet'
+        fail_msg: "/usr/local/bin/dotnet symlink is wrong: {{ link.stat }}"
+
+    # The symlinked dotnet runs and reports the resolved version - proves
+    # resolve -> extract -> symlink -> PATH end to end.
+    - name: Run the symlinked dotnet
+      ansible.builtin.command: dotnet
+      changed_when: false
+      register: dotnet_run
+
+    - name: Assert dotnet reports the resolved version
+      ansible.builtin.assert:
+        that:
+          - "'dotnet ' ~ resolved_version ~ ' fixture' in dotnet_run.stdout"
+        fail_msg: "dotnet did not report {{ resolved_version }}: {{ dotnet_run.stdout }}"
+
+    # profile.d wires DOTNET_ROOT at the resolved install dir, the tools dir
+    # on PATH, and the telemetry opt-out.
+    - name: Slurp the profile.d script
+      ansible.builtin.slurp:
+        src: /etc/profile.d/dotnet.sh
+      register: profile_script
+
+    - name: Assert the profile.d script wires DOTNET_ROOT, tools PATH, telemetry
+      ansible.builtin.assert:
+        that:
+          - "'DOTNET_ROOT=' ~ install_dir in profile_body"
+          - "'DOTNET_TOOLS_ROOT=/usr/local/share/dotnet/tools' in profile_body"
+          - "'DOTNET_CLI_TELEMETRY_OPTOUT=1' in profile_body"
+        fail_msg: "/etc/profile.d/dotnet.sh is not wired correctly: {{ profile_body }}"
+      vars:
+        profile_body: "{{ profile_script.content | b64decode }}"
+
+    # /etc/dotnet/install_location (the owned_files entry) holds the install
+    # dir - Microsoft's non-login-shell runtime-discovery hint.
+    - name: Slurp /etc/dotnet/install_location
+      ansible.builtin.slurp:
+        src: /etc/dotnet/install_location
+      register: install_location
+
+    - name: Assert install_location points at the install dir
+      ansible.builtin.assert:
+        that:
+          - (install_location.content | b64decode | trim) == install_dir
+        fail_msg: >-
+          /etc/dotnet/install_location is wrong:
+          {{ install_location.content | b64decode }}
+
+    # Manifest records the resolved version, the single symlink, and the
+    # owned_files path.
+    - name: Slurp the version manifest
+      ansible.builtin.slurp:
+        src: "{{ manifest_path }}"
+      register: manifest_raw
+
+    - name: Parse the manifest
+      ansible.builtin.set_fact:
+        manifest: "{{ manifest_raw.content | b64decode | from_json }}"
+
+    - name: Assert the manifest records the version, symlink, and owned file
+      ansible.builtin.assert:
+        that:
+          - manifest.version == resolved_version
+          - manifest.name == 'dotnet'
+          - manifest.install_dir == install_dir
+          - manifest.profile_script == 'dotnet'
+          - manifest.symlinks | length == 1
+          - manifest.symlinks[0].path == '/usr/local/bin/dotnet'
+          - manifest.owned_files == ['/etc/dotnet/install_location']
+        fail_msg: "Manifest content is wrong: {{ manifest }}"

@@ -1,0 +1,66 @@
+---
+# Defaults and the input contract for the dotnet_sdk role.
+#
+# The second real consumer of the section-1 host-push toolchain pattern
+# (roles/toolchain_host_push). Like the jdk role, it adds ONE thing on top
+# of that pattern: resolving an operator's channel + version pin against
+# Microsoft's .NET release-metadata feed into a concrete
+# {resolved version, tarball name}, then delegating install / swap /
+# uninstall to toolchain_host_push. It ports the PowerShell reconciler's
+# DotnetSdkProvider (Infrastructure-Vm-Provisioner up/dotnet).
+#
+# Required input: none. With the defaults below and an empty
+# dotnet_sdk_versions the role is a no-op that uninstalls any .NET SDK the
+# pattern has installed.
+#
+# dotnet_sdk_versions - the desired SDK entries. Each entry is a mapping of
+# a release channel plus a version pin (both mirror the PowerShell
+# dotnetSdk config field):
+#
+#   channel  "<major>.<minor>" (e.g. "10.0") - selects the releases.json
+#            feed to query.
+#   version  a granularity string within that channel:
+#              "10"        newest released SDK on the channel (latest-sdk)
+#              "10.0"      newest released SDK on the channel (latest-sdk)
+#              "10.0.100"  the exact 10.0.100 SDK
+#
+# Major / major.minor both defer to the feed's own 'latest-sdk' string
+# (Microsoft's published "newest released SDK on this channel"); only an
+# exact "x.y.z" pin resolves to that literal version. Empty (the default)
+# means "no SDK desired", which uninstalls every SDK version the pattern
+# currently has installed - the same set-difference removal
+# toolchain_host_push gives every tool.
+#
+# v1 supports at most ONE SDK per host (a length > 1 list is a hard error
+# in tasks/main.yml), mirroring the PowerShell DotnetSdkProvider cap.
+# Multi-SDK coexistence would need per-version DOTNET_ROOT / PATH wiring
+# beyond the single /etc/profile.d/dotnet.sh this role writes.
+dotnet_sdk_versions: []
+
+# Base URL of the .NET release-metadata feed the resolver queries.
+# Overridable so a molecule scenario can point it at an in-container
+# fixture, or an estate can front it with a caching mirror. The resolver
+# appends /<channel>/releases.json to this base.
+dotnet_sdk_releases_base_url: https://builds.dotnet.microsoft.com/dotnet/release-metadata
+
+# The runtime identifier that selects which per-file entry in an sdk
+# record is the tarball to install. Defaulted to the only combination this
+# role installs (a 64-bit Linux SDK), exposed so an aarch64 fleet is a var
+# override rather than a fork. Mirrors DotnetSdkLinuxRid.
+dotnet_sdk_rid: linux-x64
+
+# Install base for the SDK, forwarded to toolchain_host_push so the install
+# dir it creates (/opt/dotnet-<version>) and the DOTNET_ROOT this role
+# writes into /etc/profile.d/dotnet.sh (and /etc/dotnet/install_location)
+# stay in lockstep. Overridable, but every consumer of the resolved dir
+# reads this one var.
+dotnet_sdk_install_base: /opt
+
+# The directory global .NET tools install into (DOTNET_TOOLS_ROOT). Owned
+# by the nested dotnet_tools role (step 5.4), but its PATH entry is wired
+# here so the single /etc/profile.d/dotnet.sh is the one source of truth
+# for the dotnet PATH - matching the PowerShell provider, where the SDK
+# install writes the whole dotnet.sh including the tools dir. The dir need
+# not exist yet: the first tool install creates it, and prepending a
+# not-yet-present dir to PATH is harmless.
+dotnet_sdk_tools_root: /usr/local/share/dotnet/tools

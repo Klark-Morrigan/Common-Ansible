@@ -1,0 +1,105 @@
+---
+# Verify the post-swap state: 10.0.100 fully removed, 10.0.101 active. Covers
+# the plan's "swap versions" case at the dotnet_sdk-role level (resolve of a
+# new pin driving the pattern's uninstall-then-install), including that the
+# owned install_location file retargeted with the swap.
+
+- name: Verify - .NET SDK swap post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    old_dir: /opt/dotnet-10.0.100
+    old_manifest: /var/lib/common-ansible/toolchains/manifests/dotnet-10.0.100.json
+    new_dir: /opt/dotnet-10.0.101
+    new_manifest: /var/lib/common-ansible/toolchains/manifests/dotnet-10.0.101.json
+  tasks:
+    - name: Stat the old version's artifacts
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: old_artifacts
+      loop:
+        - "{{ old_dir }}"
+        - "{{ old_manifest }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Assert every 10.0.100 artifact was removed
+      ansible.builtin.assert:
+        that:
+          - (old_artifacts.results | map(attribute='stat.exists') | list) == [false, false]
+        fail_msg: >-
+          A .NET SDK 10.0.100 artifact survived the swap:
+          {{ old_artifacts.results | map(attribute='stat.exists') | list }}
+
+    - name: Stat the new version's extracted driver
+      ansible.builtin.stat:
+        path: "{{ new_dir }}/dotnet"
+      register: new_bin
+
+    - name: Assert 10.0.101 is installed
+      ansible.builtin.assert:
+        that:
+          - new_bin.stat.exists
+          - new_bin.stat.executable
+        fail_msg: ".NET SDK 10.0.101 did not install: {{ new_bin.stat }}"
+
+    - name: Stat the /usr/local/bin/dotnet symlink
+      ansible.builtin.stat:
+        path: /usr/local/bin/dotnet
+      register: symlink
+
+    - name: Assert the dotnet symlink retargeted at 10.0.101
+      ansible.builtin.assert:
+        that:
+          - symlink.stat.islnk
+          - symlink.stat.lnk_target == new_dir ~ '/dotnet'
+        fail_msg: >-
+          /usr/local/bin/dotnet did not retarget at 10.0.101; stat: {{ symlink.stat }}
+
+    - name: Run the symlinked dotnet
+      ansible.builtin.command: dotnet
+      changed_when: false
+      register: dotnet_run
+
+    - name: Assert the active dotnet reports 10.0.101
+      ansible.builtin.assert:
+        that:
+          - "'dotnet 10.0.101 fixture' in dotnet_run.stdout"
+        fail_msg: "Active dotnet is not 10.0.101: {{ dotnet_run.stdout }}"
+
+    - name: Slurp the profile.d script
+      ansible.builtin.slurp:
+        src: /etc/profile.d/dotnet.sh
+      register: profile_script
+
+    - name: Assert the profile.d script points at 10.0.101
+      ansible.builtin.assert:
+        that:
+          - "'DOTNET_ROOT=' ~ new_dir in (profile_script.content | b64decode)"
+        fail_msg: >-
+          /etc/profile.d/dotnet.sh still points at the old version:
+          {{ profile_script.content | b64decode }}
+
+    - name: Slurp /etc/dotnet/install_location
+      ansible.builtin.slurp:
+        src: /etc/dotnet/install_location
+      register: install_location
+
+    - name: Assert install_location retargeted at 10.0.101
+      ansible.builtin.assert:
+        that:
+          - (install_location.content | b64decode | trim) == new_dir
+        fail_msg: >-
+          /etc/dotnet/install_location still points at the old version:
+          {{ install_location.content | b64decode }}
+
+    - name: Assert the 10.0.101 manifest is present
+      ansible.builtin.stat:
+        path: "{{ new_manifest }}"
+      register: new_manifest_stat
+
+    - name: Fail if the 10.0.101 manifest is missing
+      ansible.builtin.assert:
+        that:
+          - new_manifest_stat.stat.exists
+        fail_msg: "The .NET SDK 10.0.101 manifest is missing after the swap."

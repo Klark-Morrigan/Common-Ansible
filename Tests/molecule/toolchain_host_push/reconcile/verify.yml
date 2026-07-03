@@ -1,0 +1,97 @@
+---
+# Verify the post-swap state: 1.0.0 fully removed, 2.0.0 active. Covers
+# the plan's "version swap (old symlinks/profile removed)" case.
+
+- name: Verify - faketool swap post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    old_manifest: /var/lib/common-ansible/toolchains/manifests/faketool-1.0.0.json
+    new_manifest: /var/lib/common-ansible/toolchains/manifests/faketool-2.0.0.json
+  tasks:
+    # The old version is gone in every dimension it owned.
+    - name: Stat the old version's artifacts
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: old_artifacts
+      loop:
+        - /opt/faketool-1.0.0
+        - "{{ old_manifest }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Assert every 1.0.0 artifact was removed
+      ansible.builtin.assert:
+        that:
+          - (old_artifacts.results | map(attribute='stat.exists') | list) == [false, false]
+        fail_msg: >-
+          A faketool 1.0.0 artifact survived the swap:
+          {{ old_artifacts.results | map(attribute='stat.exists') | list }}
+
+    # The new version's install dir is present.
+    - name: Stat the new version's extracted binary
+      ansible.builtin.stat:
+        path: /opt/faketool-2.0.0/bin/faketool
+      register: new_bin
+
+    - name: Assert 2.0.0 is installed
+      ansible.builtin.assert:
+        that:
+          - new_bin.stat.exists
+          - new_bin.stat.executable
+        fail_msg: "faketool 2.0.0 did not install: {{ new_bin.stat }}"
+
+    # The shared symlink was retargeted at the new version, not left
+    # dangling at the removed 1.0.0 install dir.
+    - name: Stat the /usr/local/bin symlink
+      ansible.builtin.stat:
+        path: /usr/local/bin/faketool
+      register: symlink
+
+    - name: Assert the symlink retargeted at 2.0.0
+      ansible.builtin.assert:
+        that:
+          - symlink.stat.exists
+          - symlink.stat.islnk
+          - symlink.stat.lnk_target == '/opt/faketool-2.0.0/bin/faketool'
+        fail_msg: >-
+          /usr/local/bin/faketool did not retarget at 2.0.0;
+          stat: {{ symlink.stat }}
+
+    # The active binary reports the new version.
+    - name: Run the symlinked binary
+      ansible.builtin.command: faketool
+      changed_when: false
+      register: tool_run
+
+    - name: Assert the active binary reports 2.0.0
+      ansible.builtin.assert:
+        that:
+          - "'faketool 2.0.0 fixture' in tool_run.stdout"
+        fail_msg: "Active faketool is not 2.0.0: {{ tool_run.stdout }}"
+
+    # profile.d was rewritten to the new version's home.
+    - name: Slurp the profile.d script
+      ansible.builtin.slurp:
+        src: /etc/profile.d/faketool.sh
+      register: profile_script
+
+    - name: Assert the profile.d script points at 2.0.0
+      ansible.builtin.assert:
+        that:
+          - "'FAKETOOL_HOME=/opt/faketool-2.0.0' in (profile_script.content | b64decode)"
+        fail_msg: >-
+          /etc/profile.d/faketool.sh still points at the old version:
+          {{ profile_script.content | b64decode }}
+
+    # The new manifest exists and the recorded fact holds exactly 2.0.0.
+    - name: Stat the new version manifest
+      ansible.builtin.stat:
+        path: "{{ new_manifest }}"
+      register: new_manifest_stat
+
+    - name: Assert the 2.0.0 manifest is present
+      ansible.builtin.assert:
+        that:
+          - new_manifest_stat.stat.exists
+        fail_msg: "The faketool 2.0.0 manifest is missing after the swap."

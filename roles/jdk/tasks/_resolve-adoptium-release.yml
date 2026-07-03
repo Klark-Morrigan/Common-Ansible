@@ -1,0 +1,128 @@
+---
+# Resolve ONE Adoptium version pin (jdk_pin) into a concrete release and
+# append it to jdk_resolved_versions. A port of the PowerShell
+# Resolve-AdoptiumRelease: translate an operator granularity ("21",
+# "21.0", "21.0.5", "21.0.5+11") into {resolved version, tarball name}
+# by querying the Adoptium v3 feature_releases GA endpoint.
+#
+# Where this runs: on the managed host (no delegate_to). The metadata
+# query is tiny and goes over the host's normal egress; only the large
+# tarball is pulled over the substrate host file server (the measured
+# NAT-bypass). Keeping the query on the target is also what lets a
+# molecule scenario mock the API with an in-container fixture bound to
+# 127.0.0.1 - the same reason toolchain_host_push runs get_url on the
+# target rather than the controller.
+#
+# Caller contract (set before including this file, once per pin):
+#   jdk_pin   - the version-pin string to resolve.
+
+# Reset the per-pin working facts so a prior pin's values cannot leak in
+# (facts persist across include_tasks iterations). Empty-string sentinels
+# (not null) sidestep the "{{ None }}" -> literal "None" templating trap
+# and let the filter conditions below key off length.
+- name: Reset the per-pin resolver working facts
+  ansible.builtin.set_fact:
+    jdk_pin_minor: ""
+    jdk_pin_security: ""
+    jdk_pin_build: ""
+    jdk_candidates: []
+
+# Guard the pin shape up front so a typo fails here with a clear message
+# rather than as an opaque empty-candidate set after the API round-trip.
+- name: Assert the version pin is a recognised granularity
+  ansible.builtin.assert:
+    that:
+      - jdk_pin is match('^\d+(\.\d+(\.\d+(\+\d+)?)?)?$')
+    fail_msg: >-
+      jdk version pin '{{ jdk_pin }}' is not a recognised granularity.
+      Use '21', '21.0', '21.0.5', or '21.0.5+11'.
+
+# Split "<major>.<minor>.<security>+<build>" into its parts. The build (if
+# any) is after '+'; the rest is dot-separated. Slicing a too-short list
+# yields '' which the conditions below read as "do not filter on this".
+- name: Parse the pin into major / minor / security / build
+  ansible.builtin.set_fact:
+    jdk_pin_major: "{{ jdk_pin.split('+')[0].split('.')[0] }}"
+    jdk_pin_minor: "{{ jdk_pin.split('+')[0].split('.')[1] | default('', true) }}"
+    jdk_pin_security: "{{ jdk_pin.split('+')[0].split('.')[2] | default('', true) }}"
+    jdk_pin_build: "{{ jdk_pin.split('+')[1] | default('', true) if '+' in jdk_pin else '' }}"
+
+# Major-only pins trust the API's sort_order=DESC and take the single
+# newest GA (page_size 1). Any narrower pin needs a page of candidates to
+# filter locally, mirroring the PowerShell resolver's page-size choice.
+- name: Choose the API page size for this granularity
+  ansible.builtin.set_fact:
+    jdk_pin_page_size: "{{ 1 if (jdk_pin_minor | length == 0) else 50 }}"
+
+# Query the GA feature_releases endpoint. return_content so parsing does
+# not depend on the server's content-type header (a fixture file server
+# will not send application/json); from_json below does the decode.
+- name: Query the Adoptium feature_releases GA endpoint
+  ansible.builtin.uri:
+    url: >-
+      {{ jdk_adoptium_api_base_url }}/assets/feature_releases/{{
+      jdk_pin_major }}/ga?architecture={{ jdk_architecture }}&image_type={{
+      jdk_image_type }}&os={{ jdk_os }}&page_size={{ jdk_pin_page_size
+      }}&sort_order=DESC
+    return_content: true
+  register: jdk_adoptium_response
+
+- name: Decode the Adoptium release list
+  ansible.builtin.set_fact:
+    jdk_adoptium_releases: "{{ jdk_adoptium_response.content | from_json }}"
+
+- name: Assert the API returned at least one GA release
+  ansible.builtin.assert:
+    that:
+      - jdk_adoptium_releases | length > 0
+    fail_msg: >-
+      Adoptium returned no GA releases for major {{ jdk_pin_major }}
+      (pin '{{ jdk_pin }}').
+
+# Narrow to the candidates matching the pin. A single ordered pass keeps
+# the API's DESC ordering, and each `when` clause applies a constraint
+# only when the pin specified that part - so a major-only pin keeps every
+# release and a "21.0.5+11" pin is filtered on all three. Both sides are
+# cast to int, so the comparison is type-safe whether version_data
+# arrives as JSON numbers (the real API) or strings. Direct attribute
+# access (item.version_data.minor), not selectattr, because Ansible's
+# selectattr does not reliably traverse a dotted attribute path.
+- name: Select the matching candidate releases in DESC order
+  ansible.builtin.set_fact:
+    jdk_candidates: "{{ jdk_candidates + [item] }}"
+  loop: "{{ jdk_adoptium_releases }}"
+  loop_control:
+    label: "{{ item.version_data.openjdk_version }}"
+  when:
+    - jdk_pin_minor | length == 0
+      or item.version_data.minor | int == jdk_pin_minor | int
+    - jdk_pin_security | length == 0
+      or item.version_data.security | int == jdk_pin_security | int
+    - jdk_pin_build | length == 0
+      or item.version_data.build | int == jdk_pin_build | int
+
+- name: Assert a candidate build matches the pin
+  ansible.builtin.assert:
+    that:
+      - jdk_candidates | length > 0
+    fail_msg: >-
+      No Adoptium GA build matches pin '{{ jdk_pin }}'. Check it against
+      https://adoptium.net/temurin/releases/.
+
+# The newest match is the head. Adoptium ships exactly one x64/linux/jdk
+# binary per GA release, so binaries[0] is the tarball; its package
+# carries the served name and (for the staging layer's integrity check)
+# the checksum and source link.
+- name: Record the resolved release
+  ansible.builtin.set_fact:
+    jdk_resolved_versions: >-
+      {{ jdk_resolved_versions + [{
+           'requested': jdk_pin,
+           'version': jdk_pick.version_data.openjdk_version,
+           'archive': jdk_binary.package.name,
+           'checksum': jdk_binary.package.checksum,
+           'download_url': jdk_binary.package.link
+         }] }}
+  vars:
+    jdk_pick: "{{ jdk_candidates[0] }}"
+    jdk_binary: "{{ jdk_candidates[0].binaries[0] }}"

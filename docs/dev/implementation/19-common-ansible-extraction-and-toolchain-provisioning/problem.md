@@ -9,6 +9,7 @@
 - [The bridge coupling to break](#the-bridge-coupling-to-break)
 - [The three-section tooling taxonomy](#the-three-section-tooling-taxonomy)
 - [Solution approach](#solution-approach)
+- [Cutover criterion](#cutover-criterion)
 - [Constraints](#constraints)
 - [Risks and sequencing](#risks-and-sequencing)
 - [Out of scope](#out-of-scope)
@@ -185,6 +186,32 @@ bridge consumer-agnostic:
 This decoupling is a prerequisite for steps 2-3 and is sequenced before
 the consumer-specific code moves out.
 
+### The residual provisioner coupling (severed last)
+
+Two couplings survive the vault-name and location decoupling above and are
+cut only after the substrate is otherwise stable, in
+[plan.md Section 10](plan.md#section-10---decouple-common-ansible-from-the-provisioner):
+
+- *Inventory shape.* `_build-inventory.sh` / `_resolve-router.sh` parse a
+  fixed JSON shape (`vmName`/`ipAddress`/`username`/`password`, plus the
+  optional `kind=="router"` row) - an implicit, reverse-engineered
+  dependency on Vm-Provisioner's output. It is made an explicit,
+  substrate-owned *input contract* that providers conform to: dependency
+  inversion, so no substrate -> provider arrow remains at the data layer.
+- *Estate topology.* `_resolve-router.sh` carries Hyper-V KVP IP discovery,
+  WSL netsh-portproxy handling, and ICS/NAT assumptions - the last
+  estate-specific code in the substrate. It moves behind an explicit
+  transport-resolution hook (`CA_TRANSPORT_RESOLVER`): the substrate ships
+  only the hook contract and a no-op default, and the Hyper-V implementation
+  becomes one consumer-supplied provider, so the substrate names no
+  platform. Relocating the implementation does not re-couple the substrate
+  precisely because the hook is consumer-supplied, not substrate-discovered.
+
+Neither is a real menu dependency either: the
+`Common-Ansible -> Infrastructure-Vm-Provisioner` edge in the workspace
+graph is a mismodeled operational-ordering edge (the consumers, not the
+substrate, act on provisioned VMs) and is dropped.
+
 ## The three-section tooling taxonomy
 
 Each tool a VM needs is classified by acquisition strategy. This taxonomy
@@ -265,6 +292,32 @@ bridge's extra-vars/inventory contract and are not standalone, so roles
 and bridge are consumed together from one checkout, not as a separately
 published collection.
 
+## Cutover criterion
+
+The migration keeps the PowerShell toolchain reconciler in
+`Infrastructure-Vm-Provisioner` as a fork rather than deleting it, so two
+toolchain engines coexist transiently. The condition under which the
+reconciler is retired must be written, not implied - otherwise the fork
+lingers with no agreed trigger to remove it.
+
+**The reconciler is retired only when the Ansible toolchain flow (the
+section-1 `jdk` / `dotnet_sdk` / `dotnet_tools` roles) has been proven on a
+production runner VM with behavioural parity across the reconciler's three
+operations:**
+
+- *install* - a desired version absent from the VM is acquired, integrity
+  verified, and installed.
+- *swap* - changing the desired version uninstalls the old and installs the
+  new (the reconciler's diff-driven uninstall-then-install).
+- *uninstall* - a version dropped from the desired set is removed from the
+  VM.
+
+Until that criterion is met the reconciler stays the live engine and the
+Ansible flow coexists as the proving path. Retirement itself - deleting the
+reconciler and its tests from `Infrastructure-Vm-Provisioner` - is a later
+feature, out of scope here (see [Out of scope](#out-of-scope)); this feature
+only records the trigger.
+
 ## Constraints
 
 - Reusable substrate ships with a consumer; the rename keeps the existing
@@ -296,14 +349,15 @@ published collection.
 - Repo rename breaks any unpinned `uses:`/remote/`requirements.yml`
   reference; every referrer is updated in the rename step.
 - Keeping the PowerShell reconciler as a fork (step 4) means two engines
-  coexist transiently; the cutover criterion (Ansible toolchain proven on
-  a production runner) is defined before the PowerShell path is retired in
-  a later feature.
+  coexist transiently; the [Cutover criterion](#cutover-criterion) is
+  defined here so the PowerShell path has a written retirement trigger,
+  even though the removal itself is a later feature.
 
 ## Out of scope
 
 - Retiring the PowerShell toolchain reconciler entirely (kept as a fork; a
-  later feature removes it once the Ansible path is proven).
+  later feature removes it once the [Cutover criterion](#cutover-criterion)
+  is met).
 - Base-image / Packer baking of Docker (revisited only on a measured
   boot-time or fleet-scale need).
 - Migrating non-toolchain provisioner concerns (networking, disk, seed)

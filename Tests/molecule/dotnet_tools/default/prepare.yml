@@ -1,0 +1,39 @@
+---
+# Prepare the default scenario: bring the fixture up (SDK 10.0.100 + the
+# reportgenerator tool's fake .nupkg), then install the SDK via the real
+# dotnet_sdk role so the `dotnet` driver, /etc/profile.d/dotnet.sh, and the
+# tools PATH are wired exactly as production. The converge then installs the
+# tool and molecule idempotence re-runs it to prove the no-op.
+
+- name: Prepare - fixture up, then install the .NET SDK
+  hosts: all
+  gather_facts: false
+  vars:
+    fixture_port: 18841
+    fixture_stage_dir: /var/lib/dotnet-tools-fixture/srv
+    fixture_build_dir: /var/lib/dotnet-tools-fixture/build
+    fixture_api_prefix: dotnet/release-metadata
+    fixture_channel: "10.0"
+    fixture_latest_sdk: "10.0.100"
+    fixture_sdks:
+      - version: "10.0.100"
+        archive: dotnet-sdk-10.0.100-linux-x64.tar.gz
+    fixture_tools:
+      - id: dotnet-reportgenerator-globaltool
+        version: "5.4.4"
+    # Play-level so the shared (unprefixed) bridge var is not scoped to the
+    # include_role below (ansible-lint's no-role-prefix rule only fires on
+    # vars passed under a role task).
+    dotnet_sdk_releases_base_url: http://127.0.0.1:18841/dotnet/release-metadata
+    host_file_server_base_url: http://127.0.0.1:18841
+  tasks:
+    - name: Bring the fixture http server up
+      ansible.builtin.include_tasks: ../tasks/_fixture-dotnet-tools.yml
+
+    - name: Install the .NET SDK so the driver is present for the tools role
+      ansible.builtin.include_role:
+        name: dotnet_sdk
+      vars:
+        dotnet_sdk_versions:
+          - channel: "10.0"
+            version: "10.0.100"

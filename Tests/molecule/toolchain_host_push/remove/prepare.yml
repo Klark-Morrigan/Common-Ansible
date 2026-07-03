@@ -1,0 +1,37 @@
+---
+# Prepare the container for the uninstall-removed-versions scenario: bring
+# the fixture server up and install faketool 1.0.0. Converge then desires
+# the empty set, so the role removes it.
+
+- name: Prepare - fixture fileserver up, then install faketool 1.0.0
+  hosts: all
+  gather_facts: false
+  vars:
+    fixture_port: 18813
+    fixture_tool: faketool
+    fixture_versions:
+      - "1.0.0"
+    fixture_stage_dir: /var/lib/toolchain-fixture/srv
+    fixture_build_dir: /var/lib/toolchain-fixture/build
+    # Play-level so the shared (unprefixed) bridge var is not scoped to
+    # the include_role below (ansible-lint's no-role-prefix rule only
+    # fires on vars passed under a role task).
+    host_file_server_base_url: http://127.0.0.1:18813
+  tasks:
+    - name: Bring the fixture http server up
+      ansible.builtin.include_tasks: ../tasks/_fixture-fileserver.yml
+
+    - name: Install faketool 1.0.0 as the baseline to be removed
+      ansible.builtin.include_role:
+        name: toolchain_host_push
+      vars:
+        toolchain_host_push_name: faketool
+        toolchain_host_push_versions:
+          - version: "1.0.0"
+            archive: faketool-1.0.0.tar.gz
+            symlinks:
+              - name: faketool
+                source: bin/faketool
+            profile: |
+              export FAKETOOL_HOME=/opt/faketool-1.0.0
+              export PATH="$FAKETOOL_HOME/bin:$PATH"

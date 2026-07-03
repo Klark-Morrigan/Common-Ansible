@@ -1,0 +1,52 @@
+---
+# Molecule scenario for the toolchain_host_push role - install + the
+# default sequence's `idempotence` phase.
+#
+# Single Ubuntu 24.04 container, Docker driver, ansible verifier. The role
+# only manipulates the filesystem (get_url, unarchive, file, copy), so a
+# non-systemd sleep-infinity container suffices. The fixture http server
+# runs INSIDE the container (prepare.yml) bound to 127.0.0.1, so no
+# host-side listener is involved.
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: instance
+    # The shared Dockerfile bakes python3 + sudo + tar + gzip on top of
+    # the base (the bare ubuntu:24.04 image ships no /usr/bin/python3);
+    # see Tests/molecule/toolchain_host_push/Dockerfile for the build
+    # command. pre_build_image consumes the locally-tagged image directly
+    # and skips the docker_image build path (which tries the Docker
+    # Desktop Windows-side credential helper and fails inside WSL).
+    image: common-ansible/toolchain-host-push-base:24.04
+    pre_build_image: true
+    command: /bin/sleep infinity
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  env:
+    # ANSIBLE_ROLES_PATH (env) wins over ansible.cfg's roles_path,
+    # supports env-var expansion, and propagates across every molecule
+    # phase. MOLECULE_PROJECT_DIRECTORY is the scenario dir; three levels
+    # up is the repo root, then roles/.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../../roles"
+  config_options:
+    defaults:
+      stdout_callback: yaml
+      callbacks_enabled: profile_tasks
+  inventory:
+    host_vars:
+      instance:
+        ansible_user: root
+
+verifier:
+  name: ansible

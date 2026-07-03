@@ -1,0 +1,80 @@
+---
+# Defaults and the input contract for the dotnet_tools role.
+#
+# The nested global-tools half of the .NET toolchain (the SDK half is the
+# sibling dotnet_sdk role). It ports the PowerShell reconciler's
+# DotnetToolsProvider (Infrastructure-Vm-Provisioner up/dotnet): install /
+# swap / uninstall .NET global tools via the `dotnet tool` driver, recording
+# each install as a manifest so removal is glob-free.
+#
+# Unlike jdk / dotnet_sdk this role does NOT build on toolchain_host_push:
+# a global tool is a NuGet package installed by the `dotnet tool` driver,
+# not a tarball extracted to /opt. The shared piece the two have in common
+# is the manifest-driven desired-vs-installed reconcile, which this role
+# mirrors rather than delegates (the install/uninstall mechanics differ
+# entirely).
+#
+# Parent/child ordering. Every `dotnet tool` operation - install AND
+# uninstall - needs the `dotnet` driver on PATH, which the dotnet_sdk role
+# provides via /usr/local/bin/dotnet. A consumer play must therefore run
+# dotnet_tools with the SDK already present, and on teardown must run
+# dotnet_tools BEFORE dotnet_sdk so the driver is still there when the tools
+# uninstall. This is the Ansible expression of the parent/child teardown
+# ordering the PowerShell reconciler's children-walker guaranteed - here it
+# is play role-order, documented in the role README and owned by the
+# consumer flow (plan step 5.5).
+#
+# Required input: none. With the defaults below and an empty
+# dotnet_tools_tools the role is a no-op that uninstalls any global tool it
+# has a manifest for.
+#
+# dotnet_tools_tools - the desired global-tool entries. Each entry mirrors
+# the PowerShell dotnetTools config field:
+#
+#   id       the NuGet package id of the tool
+#            (e.g. "dotnet-reportgenerator-globaltool").
+#   version  the exact NuGet version to install (e.g. "5.4.4").
+#
+# The diff identity is the composite "<id>@<version>": two distinct tools
+# can legitimately share a bare NuGet version, so neither field alone keys
+# the desired-vs-installed diff (mirrors DotnetToolsProvider's composite
+# Spec.Version). Empty (the default) means "no tool desired", which
+# uninstalls every tool this role currently has a manifest for.
+dotnet_tools_tools: []
+
+# The `--tool-path` global tools install under (DOTNET_TOOLS_ROOT). MUST
+# equal the dotnet_sdk role's dotnet_sdk_tools_root: that role wires this
+# exact dir onto PATH in the single /etc/profile.d/dotnet.sh, so a mismatch
+# would install tools somewhere no shell looks. The dir need not pre-exist:
+# this role creates it before the first install.
+dotnet_tools_root: /usr/local/share/dotnet/tools
+
+# Absolute path to the dotnet driver. Defaulted to the symlink the
+# dotnet_sdk role creates so the tool operations resolve the driver
+# deterministically rather than depending on the become PATH (Ubuntu's
+# sudo secure_path does include /usr/local/bin, but pinning the path keeps
+# the contract explicit and survives a non-default sudoers).
+dotnet_tools_dotnet_bin: /usr/local/bin/dotnet
+
+# Manifest store, shared with toolchain_host_push (the jdk / dotnet_sdk
+# manifests live here too). Tool manifests are named
+# 'dotnettool-<id>-<version>.json' - a prefix that does NOT glob-collide
+# with the SDK's 'dotnet-*.json' find pattern, so a shared store stays
+# cleanly partitioned by tool.
+dotnet_tools_manifest_dir: /var/lib/common-ansible/toolchains/manifests
+
+# Per-tool staging root. Each install stages its .nupkg plus a NuGet.Config
+# that pins the staging dir as the sole package source under
+# '<staging_base>/<id>@<version>/', then wipes it after the manifest is
+# written. Under the Common-Ansible state tree alongside the toolchain cache.
+dotnet_tools_staging_base: /var/lib/common-ansible/toolchains/dotnet-tool-staging
+
+# Base URL of the substrate host file server the .nupkg is pulled from
+# (the same bridge-supplied var the tarball roles use - the Windows-side
+# listener bound to the Hyper-V switch IP, the measured NAT-bypass). Each
+# tool's package is served at '<base>/dotnet-tool-<id>-<version>.nupkg'
+# (the host-cache filename the acquisition/staging step, plan 5.5, stages
+# it under). No role-name prefix: it is the shared bridge contract var.
+# Required whenever dotnet_tools_tools is non-empty; unused on an
+# uninstall-only run (empty desired set).
+# host_file_server_base_url: "http://<bridge-host>:<port>"

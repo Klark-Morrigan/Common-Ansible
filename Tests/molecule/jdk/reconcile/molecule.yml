@@ -1,0 +1,41 @@
+---
+# Molecule scenario for the jdk role - version swap. prepare installs
+# JDK 21.0.1; converge desires 21.0.2, so the pattern uninstalls 21.0.1
+# and installs 21.0.2. molecule idempotence then re-runs converge
+# (21.0.2 already installed, 21.0.1 already gone -> no change).
+#
+# Same container/driver/verifier shape as the default scenario; see that
+# scenario's molecule.yml for the per-setting rationale.
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: instance
+    image: common-ansible/toolchain-host-push-base:24.04
+    pre_build_image: true
+    command: /bin/sleep infinity
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../../roles"
+  config_options:
+    defaults:
+      stdout_callback: yaml
+      callbacks_enabled: profile_tasks
+  inventory:
+    host_vars:
+      instance:
+        ansible_user: root
+
+verifier:
+  name: ansible

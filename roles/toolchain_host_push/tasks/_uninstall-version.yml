@@ -1,0 +1,65 @@
+---
+# Uninstall one toolchain version no longer desired
+# (toolchain_host_push_stale_entry - a parsed manifest dict). Mirror of
+# the install file, inverted, driven entirely by what the manifest
+# recorded this version owns:
+#   1. Remove the /usr/local/bin symlinks (exactly the recorded paths).
+#   2. Remove /etc/profile.d/<tool>.sh if this version wrote it.
+#   3. Remove the versioned install dir.
+#   4. Remove the manifest LAST - it is the recovery anchor: until it is
+#      gone the next reconcile can replay this teardown, so a crash mid-
+#      removal is self-healing.
+#
+# No process-drain step (the PowerShell reconciler's
+# Stop-VmProcessesUsingPath): on Linux, rm unlinks a path even while a
+# process holds an open fd, so an in-use binary does not block removal
+# (the running process keeps its already-open file). Draining is a
+# Windows file-lock concern the port does not inherit.
+
+- name: Remove the recorded /usr/local/bin symlinks
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  become: true
+  loop: "{{ toolchain_host_push_stale_entry.symlinks | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Remove the /etc/profile.d script if this version owned it
+  ansible.builtin.file:
+    path: "/etc/profile.d/{{ toolchain_host_push_stale_entry.profile_script }}.sh"
+    state: absent
+  become: true
+  when: toolchain_host_push_stale_entry.profile_script | default('') | length > 0
+
+# Remove the fixed config files this version wrote outside its install dir
+# (e.g. .NET's /etc/dotnet/install_location) before the dir goes, mirroring
+# the profile.d removal above: a tool shim that reads such a file stops
+# pointing at the about-to-vanish install dir. Only the recorded files are
+# removed, never their parent dir (shared with other tooling). `| default([])`
+# tolerates a manifest written before owned_files existed (e.g. a JDK).
+- name: Remove the recorded owned files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  become: true
+  loop: "{{ toolchain_host_push_stale_entry.owned_files | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Remove the versioned install directory
+  ansible.builtin.file:
+    path: "{{ toolchain_host_push_stale_entry.install_dir }}"
+    state: absent
+  become: true
+
+# Manifest path is deterministic from name + version, so it need not be
+# carried on the parsed record. Removed LAST (see file header).
+- name: Remove the version manifest
+  ansible.builtin.file:
+    path: >-
+      {{ toolchain_host_push_manifest_dir }}/{{
+      toolchain_host_push_stale_entry.name }}-{{
+      toolchain_host_push_stale_entry.version }}.json
+    state: absent
+  become: true

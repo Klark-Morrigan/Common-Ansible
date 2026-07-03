@@ -1,0 +1,24 @@
+---
+# Prepare the default scenario: bring the fixture up serving a single GA
+# release of feature 21 (so a major-only pin resolves to it). The converge
+# then resolves pin "21" and installs it; molecule idempotence re-runs
+# converge to prove the no-op.
+
+- name: Prepare - bring the Adoptium + fileserver fixture up
+  hosts: all
+  gather_facts: false
+  vars:
+    fixture_port: 18821
+    fixture_stage_dir: /var/lib/jdk-fixture/srv
+    fixture_build_dir: /var/lib/jdk-fixture/build
+    fixture_api_prefix: adoptium/v3
+    fixture_major: "21"
+    fixture_releases:
+      - version: "21.0.2+13"
+        minor: 0
+        security: 2
+        build: 13
+        archive: OpenJDK21U-jdk_x64_linux_hotspot_21.0.2_13.tar.gz
+  tasks:
+    - name: Bring the fixture http server up
+      ansible.builtin.include_tasks: ../tasks/_fixture-adoptium.yml

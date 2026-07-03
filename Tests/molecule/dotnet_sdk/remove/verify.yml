@@ -1,0 +1,39 @@
+---
+# Verify the post-remove state: every .NET SDK 10.0.100 artifact is gone,
+# including the owned /etc/dotnet/install_location. Covers the plan's
+# "uninstall" case at the dotnet_sdk-role level (an empty desired set
+# driving the pattern's set-difference removal).
+
+- name: Verify - .NET SDK removal post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    manifest_path: /var/lib/common-ansible/toolchains/manifests/dotnet-10.0.100.json
+  tasks:
+    - name: Stat every artifact the install owned
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: artifacts
+      loop:
+        - /opt/dotnet-10.0.100
+        - /usr/local/bin/dotnet
+        - /etc/profile.d/dotnet.sh
+        - /etc/dotnet/install_location
+        - "{{ manifest_path }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Assert every .NET SDK artifact was removed
+      ansible.builtin.assert:
+        that:
+          - >-
+            (artifacts.results | map(attribute='stat.exists') | list)
+            == [false, false, false, false, false]
+        fail_msg: >-
+          One or more .NET SDK artifacts survived removal:
+          {{
+            dict(
+              artifacts.results | map(attribute='item')
+              | zip(artifacts.results | map(attribute='stat.exists'))
+            )
+          }}

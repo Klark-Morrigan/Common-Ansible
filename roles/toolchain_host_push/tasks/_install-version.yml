@@ -1,0 +1,231 @@
+---
+# Install one desired toolchain version (toolchain_host_push_target) end
+# to end: pull the host-staged tarball, extract to the versioned install
+# dir, wire /usr/local/bin symlinks and /etc/profile.d/<tool>.sh, then
+# write the manifest LAST.
+#
+# The manifest is written last for crash recovery: if the run dies after
+# the extract but before the manifest exists, the next reconcile sees the
+# version as "not installed" (no manifest) and re-runs this file, which
+# re-extracts cleanly. A manifest written first would claim ownership of
+# paths that may not exist yet, and a later uninstall would try to tear
+# down a half-built install.
+#
+# Only called for versions with no manifest (main.yml's `missing` set),
+# so every step here is a first install - no per-task "already present"
+# guard is needed beyond the cache download's stat probe.
+
+- name: Set the install directory for this version
+  ansible.builtin.set_fact:
+    toolchain_host_push_install_dir: >-
+      {{ toolchain_host_push_install_base }}/{{
+      toolchain_host_push_name }}-{{ toolchain_host_push_target.version }}
+    # Reset the per-version manifest symlink records before the append
+    # loop below rebuilds them; the fact persists across include_tasks
+    # iterations otherwise and would leak a prior version's links.
+    toolchain_host_push_symlink_records: []
+
+# Stat the cached tarball so the download short-circuits on a
+# re-provision that still has the artifact cached, without get_url's own
+# header round-trip to the listener.
+- name: Stat the cached tarball
+  ansible.builtin.stat:
+    path: >-
+      {{ toolchain_host_push_cache_dir }}/{{ toolchain_host_push_target.archive }}
+  become: true
+  register: toolchain_host_push_cache_stat
+
+# Pull the tarball from the substrate host file server.
+# host_file_server_base_url is supplied by the bridge (the Windows-side
+# HTTP listener bound to the Hyper-V switch IP - the measured NAT-bypass);
+# molecule points it at an in-container fixture server. Cached root:root
+# 0644 - toolchain installs are root-owned, unlike the per-user runner cache.
+- name: Download the tarball from the host file server
+  ansible.builtin.get_url:
+    url: >-
+      {{ host_file_server_base_url }}/{{ toolchain_host_push_target.archive }}
+    dest: >-
+      {{ toolchain_host_push_cache_dir }}/{{ toolchain_host_push_target.archive }}
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  when: not toolchain_host_push_cache_stat.stat.exists
+
+- name: Ensure the versioned install directory exists
+  ansible.builtin.file:
+    path: "{{ toolchain_host_push_install_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+# remote_src: the tarball is already on the managed host (the cache we
+# just pulled), so no controller-side copy. strip_components defaults to
+# 1 - real toolchain tarballs ship a single <tool>-<version>/ wrapper
+# dir; a per-version override covers a flat tarball.
+- name: Extract the tarball into the install directory
+  ansible.builtin.unarchive:
+    src: >-
+      {{ toolchain_host_push_cache_dir }}/{{ toolchain_host_push_target.archive }}
+    dest: "{{ toolchain_host_push_install_dir }}/"
+    remote_src: true
+    owner: root
+    group: root
+    extra_opts:
+      - "--strip-components={{ toolchain_host_push_target.strip_components | default(1) }}"
+  become: true
+
+# Non-login-shell PATH via /usr/local/bin (sshd command exec, systemd,
+# cron - none read /etc/profile.d). force: true retargets an existing
+# link so a version swap repoints it. Each link is recorded in the
+# manifest (built below) so uninstall removes exactly these, never a glob.
+- name: Create the /usr/local/bin symlinks
+  ansible.builtin.file:
+    src: "{{ toolchain_host_push_install_dir }}/{{ item.source }}"
+    dest: "/usr/local/bin/{{ item.name }}"
+    state: link
+    force: true
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  loop: "{{ toolchain_host_push_target.symlinks | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# Accumulate the {path, target} record for each symlink so the manifest
+# carries the exact links this install created (the uninstall reads them
+# back verbatim). Built in a loop because Jinja has no list comprehension
+# for this shape.
+- name: Record the symlink ownership entries for the manifest
+  ansible.builtin.set_fact:
+    toolchain_host_push_symlink_records: >-
+      {{ toolchain_host_push_symlink_records + [record] }}
+  loop: "{{ toolchain_host_push_target.symlinks | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    record:
+      path: "/usr/local/bin/{{ item.name }}"
+      target: "{{ toolchain_host_push_install_dir }}/{{ item.source }}"
+
+# Optional bulk-symlink mode. A tool like the JDK ships dozens of
+# launchers (java, javac, jar, keytool, ...) whose exact set is only
+# known after extraction, so the caller cannot enumerate them upfront in
+# `symlinks`. `symlink_bin_dir` names a subdir of the install dir whose
+# files are ALL symlinked into /usr/local/bin. Enumeration happens here,
+# at install time, and every link is recorded in the manifest exactly
+# like an explicit `symlinks` entry - so uninstall still reads back
+# precise paths and never globs (the record model's core invariant).
+# This runs only for the `missing` set (main.yml), so a no-op re-run
+# never re-enumerates: idempotence is preserved by the skip, not a guard.
+- name: Enumerate the bin-subdir files to symlink
+  ansible.builtin.find:
+    paths: >-
+      {{ toolchain_host_push_install_dir }}/{{
+      toolchain_host_push_target.symlink_bin_dir }}
+    file_type: file
+    recurse: false
+  become: true
+  register: toolchain_host_push_bin_files
+  when: toolchain_host_push_target.symlink_bin_dir | default('') | length > 0
+
+- name: Create the /usr/local/bin symlinks for the bin-subdir files
+  ansible.builtin.file:
+    src: "{{ item.path }}"
+    dest: "/usr/local/bin/{{ item.path | basename }}"
+    state: link
+    force: true
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  loop: "{{ toolchain_host_push_bin_files.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+
+- name: Record the bin-subdir symlink ownership entries for the manifest
+  ansible.builtin.set_fact:
+    toolchain_host_push_symlink_records: >-
+      {{ toolchain_host_push_symlink_records + [record] }}
+  loop: "{{ toolchain_host_push_bin_files.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  vars:
+    record:
+      path: "/usr/local/bin/{{ item.path | basename }}"
+      target: "{{ item.path }}"
+
+# Login-shell PATH/env via /etc/profile.d/<tool>.sh. Optional: a tool
+# with no env (pure symlinks) omits `profile`. Written verbatim so the
+# user's shell expands any $VAR at login, not here.
+- name: Write the /etc/profile.d script
+  ansible.builtin.copy:
+    dest: "/etc/profile.d/{{ toolchain_host_push_name }}.sh"
+    content: "{{ toolchain_host_push_target.profile }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  when: toolchain_host_push_target.profile | default('') | length > 0
+
+# Fixed config files the tool needs outside its install dir (e.g. .NET's
+# /etc/dotnet/install_location). The parent dir is created first because
+# copy does not make it, and uninstall removes only the file (not the dir,
+# which other tooling may share). Each path is recorded in the manifest
+# below so uninstall tears down exactly these - never a glob. Optional: a
+# tool whose footprint is just dir + symlinks + profile omits `owned_files`.
+- name: Ensure each owned file's parent directory exists
+  ansible.builtin.file:
+    path: "{{ item.path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  loop: "{{ toolchain_host_push_target.owned_files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Write the owned files
+  ansible.builtin.copy:
+    dest: "{{ item.path }}"
+    content: "{{ item.content }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode | default('0644') }}"
+  become: true
+  loop: "{{ toolchain_host_push_target.owned_files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+# Manifest LAST (see file header). Records exactly what this install owns
+# so uninstall mirrors it without filesystem heuristics. profile_script
+# is the tool name when a profile was written, else empty. owned_files is
+# the path list (removal needs only the path, not the content/mode).
+- name: Write the version manifest
+  ansible.builtin.copy:
+    dest: >-
+      {{ toolchain_host_push_manifest_dir }}/{{
+      toolchain_host_push_name }}-{{ toolchain_host_push_target.version }}.json
+    content: "{{ toolchain_host_push_manifest | to_nice_json }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  vars:
+    toolchain_host_push_manifest:
+      schema_version: 1
+      name: "{{ toolchain_host_push_name }}"
+      version: "{{ toolchain_host_push_target.version }}"
+      install_dir: "{{ toolchain_host_push_install_dir }}"
+      symlinks: "{{ toolchain_host_push_symlink_records }}"
+      profile_script: >-
+        {{ toolchain_host_push_name
+           if (toolchain_host_push_target.profile | default('') | length > 0)
+           else '' }}
+      owned_files: >-
+        {{ toolchain_host_push_target.owned_files | default([])
+           | map(attribute='path') | list }}

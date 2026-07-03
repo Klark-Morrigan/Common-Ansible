@@ -1,0 +1,156 @@
+---
+# Resolve ONE .NET SDK entry (dotnet_sdk_entry = {channel, version}) into a
+# concrete release and append it to dotnet_sdk_resolved_versions. A port of
+# the PowerShell Resolve-DotnetSdkRelease: translate an operator
+# granularity ("10", "10.0", "10.0.100") on a channel ("10.0") into
+# {resolved version, tarball name} by querying Microsoft's per-channel
+# releases.json feed.
+#
+# Where this runs: on the managed host (no delegate_to). The metadata query
+# is tiny and goes over the host's normal egress; only the large tarball is
+# pulled over the substrate host file server (the measured NAT-bypass).
+# Keeping the query on the target is also what lets a molecule scenario mock
+# the feed with an in-container fixture bound to 127.0.0.1 - the same reason
+# toolchain_host_push runs get_url on the target rather than the controller.
+#
+# Caller contract (set before including this file, once per entry):
+#   dotnet_sdk_entry - a {channel, version} mapping.
+
+# Reset the per-entry working facts so a prior entry's values cannot leak
+# in (facts persist across include_tasks iterations).
+- name: Reset the per-entry resolver working facts
+  ansible.builtin.set_fact:
+    dotnet_sdk_all_sdks: []
+    dotnet_sdk_candidates: []
+    dotnet_sdk_files: []
+
+# Guard the channel and version shapes up front so a typo fails here with a
+# clear message rather than as an opaque empty-match after the round-trip.
+# JSON would parse "10.0" as the number 10, dropping the trailing zero that
+# distinguishes channels - hence the config carries channel as a string and
+# this asserts the two-part shape.
+- name: Assert the channel is a <major>.<minor> string
+  ansible.builtin.assert:
+    that:
+      - dotnet_sdk_entry.channel is match('^\d+\.\d+$')
+    fail_msg: >-
+      dotnet_sdk channel '{{ dotnet_sdk_entry.channel }}' must match
+      '<major>.<minor>' (e.g. '10.0').
+
+- name: Assert the version pin is a recognised granularity
+  ansible.builtin.assert:
+    that:
+      - dotnet_sdk_entry.version is match('^\d+(\.\d+(\.\d+)?)?$')
+    fail_msg: >-
+      dotnet_sdk version pin '{{ dotnet_sdk_entry.version }}' is not a
+      recognised granularity. Use '10', '10.0', or '10.0.100'.
+
+# Only an exact "x.y.z" pin resolves to that literal version; "major" and
+# "major.minor" both defer to the feed's latest-sdk (Microsoft's contract
+# for "newest released SDK on this channel"). A single "{{ expr }}" value
+# is type-preserved by Ansible, so this is a real boolean below.
+- name: Determine whether the pin is an exact x.y.z version
+  ansible.builtin.set_fact:
+    dotnet_sdk_is_exact: "{{ dotnet_sdk_entry.version is match('^\\d+\\.\\d+\\.\\d+$') }}"
+
+# Query the channel's releases.json. return_content so parsing does not
+# depend on the server's content-type header (a fixture file server will
+# not send application/json); from_json below does the decode.
+- name: Query the channel releases feed
+  ansible.builtin.uri:
+    url: >-
+      {{ dotnet_sdk_releases_base_url }}/{{ dotnet_sdk_entry.channel }}/releases.json
+    return_content: true
+  register: dotnet_sdk_feed_response
+
+- name: Decode the releases feed
+  ansible.builtin.set_fact:
+    dotnet_sdk_feed: "{{ dotnet_sdk_feed_response.content | from_json }}"
+
+# Bracket access on 'latest-sdk' because the hyphen would otherwise parse
+# as subtraction; `| default('')` turns a feed missing the field into the
+# empty-string sentinel the assert below rejects (only reached on the
+# non-exact branch - Jinja evaluates just the taken side of the inline if).
+- name: Determine the target SDK version
+  ansible.builtin.set_fact:
+    dotnet_sdk_target_version: >-
+      {{ dotnet_sdk_entry.version if dotnet_sdk_is_exact
+         else dotnet_sdk_feed['latest-sdk'] | default('') }}
+
+- name: Assert a target SDK version was determined
+  ansible.builtin.assert:
+    that:
+      - dotnet_sdk_target_version | length > 0
+    fail_msg: >-
+      channel '{{ dotnet_sdk_entry.channel }}' feed has no 'latest-sdk'
+      field; cannot resolve request '{{ dotnet_sdk_entry.version }}'.
+
+# Flatten releases[].sdks[] into one list. The plural 'sdks' list is the
+# comprehensive one (the singular 'sdk' field is just an alias for
+# sdks[0]); flattening it finds side-by-side SDKs published in the same
+# release entry, mirroring the PowerShell scan.
+- name: Flatten every SDK published on the channel
+  ansible.builtin.set_fact:
+    dotnet_sdk_all_sdks: >-
+      {{ dotnet_sdk_feed.releases | map(attribute='sdks') | flatten }}
+
+# Narrow to the SDK whose version equals the target. selectattr on the
+# single-level 'version' attribute is reliable (the dotted-path caveat that
+# bit the jdk resolver does not apply here).
+- name: Select the SDK matching the target version
+  ansible.builtin.set_fact:
+    dotnet_sdk_candidates: >-
+      {{ dotnet_sdk_all_sdks
+         | selectattr('version', 'defined')
+         | selectattr('version', 'equalto', dotnet_sdk_target_version)
+         | list }}
+
+- name: Assert the target SDK exists on the channel
+  ansible.builtin.assert:
+    that:
+      - dotnet_sdk_candidates | length > 0
+    fail_msg: >-
+      SDK '{{ dotnet_sdk_target_version }}' (requested
+      '{{ dotnet_sdk_entry.version }}') not found on channel
+      '{{ dotnet_sdk_entry.channel }}'. Available:
+      {{ dotnet_sdk_all_sdks | map(attribute='version') | unique | sort | join(', ') }}.
+
+# Pick the linux-x64 .tar.gz file from the matched SDK's files[]. Both the
+# rid and the .tar.gz suffix are required: a channel entry also lists the
+# .pkg / .exe installers and other RIDs.
+- name: Select the linux-x64 tarball file for the matched SDK
+  ansible.builtin.set_fact:
+    dotnet_sdk_files: >-
+      {{ dotnet_sdk_candidates[0].files
+         | selectattr('rid', 'defined')
+         | selectattr('rid', 'equalto', dotnet_sdk_rid)
+         | selectattr('name', 'search', '\.tar\.gz$')
+         | list }}
+
+- name: Assert a linux-x64 tarball exists for the matched SDK
+  ansible.builtin.assert:
+    that:
+      - dotnet_sdk_files | length > 0
+    fail_msg: >-
+      SDK '{{ dotnet_sdk_target_version }}' on channel
+      '{{ dotnet_sdk_entry.channel }}' has no '{{ dotnet_sdk_rid }}'
+      .tar.gz file in releases.json.
+
+# Record the resolved release. `archive` is the tarball basename the file
+# server serves it under (the staging layer stages it by this name);
+# `checksum` (sha512) and `download_url` are surfaced for that staging
+# layer's integrity check, exactly as the jdk resolver surfaces them.
+- name: Record the resolved release
+  ansible.builtin.set_fact:
+    dotnet_sdk_resolved_versions: >-
+      {{ dotnet_sdk_resolved_versions + [{
+           'requested': dotnet_sdk_entry.version,
+           'channel': dotnet_sdk_entry.channel,
+           'version': dotnet_sdk_pick.version,
+           'archive': dotnet_sdk_file.name,
+           'checksum': dotnet_sdk_file.hash,
+           'download_url': dotnet_sdk_file.url
+         }] }}
+  vars:
+    dotnet_sdk_pick: "{{ dotnet_sdk_candidates[0] }}"
+    dotnet_sdk_file: "{{ dotnet_sdk_files[0] }}"

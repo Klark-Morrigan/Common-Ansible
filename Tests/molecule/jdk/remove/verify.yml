@@ -1,0 +1,38 @@
+---
+# Verify the post-remove state: every JDK 21.0.1 artifact is gone. Covers
+# the plan's "uninstall" case at the jdk-role level (an empty pin set
+# driving the pattern's set-difference removal).
+
+- name: Verify - JDK removal post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    manifest_path: /var/lib/common-ansible/toolchains/manifests/jdk-21.0.1+12.json
+  tasks:
+    - name: Stat every artifact the install owned
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: artifacts
+      loop:
+        - /opt/jdk-21.0.1+12
+        - /usr/local/bin/java
+        - /usr/local/bin/javac
+        - /etc/profile.d/jdk.sh
+        - "{{ manifest_path }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Assert every JDK artifact was removed
+      ansible.builtin.assert:
+        that:
+          - >-
+            (artifacts.results | map(attribute='stat.exists') | list)
+            == [false, false, false, false, false]
+        fail_msg: >-
+          One or more JDK artifacts survived removal:
+          {{
+            dict(
+              artifacts.results | map(attribute='item')
+              | zip(artifacts.results | map(attribute='stat.exists'))
+            )
+          }}

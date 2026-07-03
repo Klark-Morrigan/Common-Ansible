@@ -1,0 +1,132 @@
+---
+# Shared fixture bring-up for the dotnet_sdk molecule scenarios. Included
+# from each scenario's prepare.yml. One in-container python http.server on
+# 127.0.0.1 stands in for BOTH:
+#   - the .NET release-metadata feed (a canned <channel>/releases.json), and
+#   - the substrate host file server (the fake SDK tarballs).
+# So the role's resolve (ansible.builtin.uri) and its delegated install
+# (toolchain_host_push get_url) both reach a real listener without touching
+# builds.dotnet.microsoft.com or a host-side server (neither of which
+# exists on the molecule controller).
+#
+# Each fake SDK tarball carries a single `dotnet` executable stub at the
+# archive root (no wrapper dir), matching the real .NET SDK tarball shape,
+# so the role's strip_components=0 lands `dotnet` at the install-dir root
+# and the single-symlink mode has a driver to link.
+#
+# Caller contract (play-level vars the includer must set):
+#   fixture_port        - tcp port the http server binds on 127.0.0.1.
+#                         Distinct per scenario so concurrent runs cannot
+#                         collide.
+#   fixture_stage_dir   - directory the http server serves from.
+#   fixture_build_dir   - scratch dir the tarball payloads are built in.
+#   fixture_api_prefix  - path prefix under which the feed is served, e.g.
+#                         'dotnet/release-metadata';
+#                         dotnet_sdk_releases_base_url must be
+#                         http://127.0.0.1:<port>/<fixture_api_prefix>.
+#   fixture_channel     - the <major>.<minor> channel the feed is served for.
+#   fixture_latest_sdk  - the feed's 'latest-sdk' string (what a
+#                         major/major.minor pin resolves to).
+#   fixture_sdks        - list of SDKs to publish on the channel. Each entry
+#                         {version, archive}.
+
+- name: Create the fixture build and stage directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ fixture_build_dir }}"
+    - "{{ fixture_stage_dir }}"
+    - "{{ fixture_stage_dir }}/{{ fixture_api_prefix }}/{{ fixture_channel }}"
+
+- name: Create each SDK's payload directory
+  ansible.builtin.file:
+    path: "{{ fixture_build_dir }}/dotnet-{{ item.version }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ fixture_sdks }}"
+  loop_control:
+    label: "{{ item.version }}"
+
+# The `dotnet` stub echoes its version so a scenario's verify can run the
+# symlinked driver and confirm the active version end to end.
+- name: Stage the dotnet driver stub in each payload
+  ansible.builtin.copy:
+    dest: "{{ fixture_build_dir }}/dotnet-{{ item.version }}/dotnet"
+    content: |
+      #!/bin/sh
+      echo "dotnet {{ item.version }} fixture"
+    mode: "0755"
+  loop: "{{ fixture_sdks }}"
+  loop_control:
+    label: "{{ item.version }}"
+
+# tar the `dotnet` file directly (no -C into a wrapper dir kept in the
+# archive) so the archive root holds `dotnet` - the flat strip_components=0
+# shape the real SDK tarball uses. `creates` makes the build idempotent and
+# satisfies no-changed-when.
+- name: Build a fake SDK tarball per version  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    argv:
+      - tar
+      - -C
+      - "{{ fixture_build_dir }}/dotnet-{{ item.version }}"
+      - -czf
+      - "{{ fixture_stage_dir }}/{{ item.archive }}"
+      - dotnet
+    creates: "{{ fixture_stage_dir }}/{{ item.archive }}"
+  loop: "{{ fixture_sdks }}"
+  loop_control:
+    label: "{{ item.version }}"
+
+# Build the releases.json payload: one release object per SDK, each with a
+# single-element sdks[] carrying the linux-x64 .tar.gz file. Only the fields
+# the resolver reads (latest-sdk at the top; per-sdk version + files[].{name,
+# rid, url, hash}).
+- name: Compose each release object
+  ansible.builtin.set_fact:
+    fixture_releases_payload: "{{ fixture_releases_payload | default([]) + [release_obj] }}"
+  loop: "{{ fixture_sdks }}"
+  loop_control:
+    label: "{{ item.version }}"
+  vars:
+    release_obj:
+      sdks:
+        - version: "{{ item.version }}"
+          files:
+            - name: "{{ item.archive }}"
+              rid: linux-x64
+              url: "http://127.0.0.1:{{ fixture_port }}/{{ item.archive }}"
+              hash: "fixture-sha512-{{ item.version }}"
+
+- name: Write the canned releases.json feed
+  ansible.builtin.copy:
+    dest: >-
+      {{ fixture_stage_dir }}/{{ fixture_api_prefix }}/{{ fixture_channel }}/releases.json
+    content: "{{ feed | to_nice_json }}"
+    mode: "0644"
+  vars:
+    feed:
+      channel-version: "{{ fixture_channel }}"
+      latest-sdk: "{{ fixture_latest_sdk }}"
+      releases: "{{ fixture_releases_payload }}"
+
+# nohup + & detaches the listener so prepare can complete and converge can
+# proceed. Log redirection keeps the connection plugin's channel clean.
+- name: Start python http.server serving the staging directory
+  ansible.builtin.shell:
+    cmd: >-
+      nohup python3 -m http.server {{ fixture_port }}
+      --bind 127.0.0.1
+      --directory {{ fixture_stage_dir }}
+      >/var/log/dotnet-fixture-http.log 2>&1 &
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+- name: Wait for the fixture http server to accept connections
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ fixture_port }}"
+    timeout: 10

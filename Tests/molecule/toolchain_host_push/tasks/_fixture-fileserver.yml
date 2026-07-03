@@ -1,0 +1,99 @@
+---
+# Shared fixture-fileserver bring-up for the toolchain_host_push molecule
+# scenarios. Included from each scenario's prepare.yml.
+#
+# Builds one fake tool tarball per requested version and serves them from
+# an in-container python http.server on 127.0.0.1, so the role's get_url
+# reaches a real listener without a host-side server (which would not
+# exist on the molecule controller anyway). This mirrors the production
+# path where the substrate _start-host-file-server.ps1 binds the Hyper-V
+# switch IP.
+#
+# Each tarball carries a single wrapper dir <tool>-<version>/bin/<tool>
+# (an executable stub) so the role's default strip_components=1 lands
+# bin/<tool> at the install-dir root - the same shape a real JDK/.NET
+# tarball has.
+#
+# Caller contract (play-level vars the includer must set):
+#   fixture_port       - tcp port the http server binds on 127.0.0.1.
+#                        Each scenario uses a distinct value so concurrent
+#                        runs cannot collide.
+#   fixture_stage_dir  - directory the http server serves the tarballs from.
+#   fixture_build_dir  - scratch directory the tarball payloads are built in.
+#   fixture_tool       - tool name; drives the payload and tarball names.
+#   fixture_versions   - list of version strings to build tarballs for.
+
+- name: Create the fixture build and stage directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ fixture_build_dir }}"
+    - "{{ fixture_stage_dir }}"
+
+- name: Create each version's payload bin directory
+  ansible.builtin.file:
+    path: "{{ fixture_build_dir }}/{{ fixture_tool }}-{{ item }}/bin"
+    state: directory
+    mode: "0755"
+  loop: "{{ fixture_versions }}"
+  loop_control:
+    label: "{{ item }}"
+
+# The stub echoes its version so a scenario's verify can run the
+# symlinked binary and confirm the active version end to end.
+- name: Stage an executable stub binary in each payload
+  ansible.builtin.copy:
+    dest: "{{ fixture_build_dir }}/{{ fixture_tool }}-{{ item }}/bin/{{ fixture_tool }}"
+    content: |
+      #!/bin/sh
+      echo "{{ fixture_tool }} {{ item }} fixture"
+    mode: "0755"
+  loop: "{{ fixture_versions }}"
+  loop_control:
+    label: "{{ item }}"
+
+# Build with `tar -C <build> <tool>-<ver>` (not community.general.archive)
+# so the archive keeps the <tool>-<version>/ wrapper dir as its root - the
+# strip_components=1 shape the role defaults to. The archive module
+# flattens a directory's contents to the root, which would not exercise
+# the strip. `creates` makes the build idempotent (and satisfies
+# no-changed-when); this fixture layout is exactly what the module cannot
+# pin, so the command form is the right tool here.
+- name: Build a fake tarball per version with a wrapper dir  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    argv:
+      - tar
+      - -C
+      - "{{ fixture_build_dir }}"
+      - -czf
+      - "{{ fixture_stage_dir }}/{{ fixture_tool }}-{{ item }}.tar.gz"
+      - "{{ fixture_tool }}-{{ item }}"
+    creates: "{{ fixture_stage_dir }}/{{ fixture_tool }}-{{ item }}.tar.gz"
+  loop: "{{ fixture_versions }}"
+  loop_control:
+    label: "{{ item }}"
+
+# nohup + & detaches the listener so molecule's prepare phase can complete
+# and converge can proceed. Redirecting stdout/stderr to a log keeps the
+# connection plugin's channel free of background-process output.
+- name: Start python http.server serving the staging directory
+  ansible.builtin.shell:
+    cmd: >-
+      nohup python3 -m http.server {{ fixture_port }}
+      --bind 127.0.0.1
+      --directory {{ fixture_stage_dir }}
+      >/var/log/toolchain-fixture-http.log 2>&1 &
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+# Tight wait-for so a server that died at startup (port in use, etc.)
+# fails prepare loudly rather than letting converge hit a
+# connection-refused get_url and obscure the root cause.
+- name: Wait for the fixture http server to accept connections
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ fixture_port }}"
+    timeout: 10

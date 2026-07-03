@@ -1,0 +1,91 @@
+---
+# Verify the post-swap state: 21.0.1 fully removed, 21.0.2 active. Covers
+# the plan's "swap versions" case at the jdk-role level (resolve of a new
+# pin driving the pattern's uninstall-then-install).
+
+- name: Verify - JDK swap post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    old_dir: /opt/jdk-21.0.1+12
+    old_manifest: /var/lib/common-ansible/toolchains/manifests/jdk-21.0.1+12.json
+    new_dir: /opt/jdk-21.0.2+13
+    new_manifest: /var/lib/common-ansible/toolchains/manifests/jdk-21.0.2+13.json
+  tasks:
+    - name: Stat the old version's artifacts
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: old_artifacts
+      loop:
+        - "{{ old_dir }}"
+        - "{{ old_manifest }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Assert every 21.0.1 artifact was removed
+      ansible.builtin.assert:
+        that:
+          - (old_artifacts.results | map(attribute='stat.exists') | list) == [false, false]
+        fail_msg: >-
+          A JDK 21.0.1 artifact survived the swap:
+          {{ old_artifacts.results | map(attribute='stat.exists') | list }}
+
+    - name: Stat the new version's extracted launcher
+      ansible.builtin.stat:
+        path: "{{ new_dir }}/bin/java"
+      register: new_bin
+
+    - name: Assert 21.0.2 is installed
+      ansible.builtin.assert:
+        that:
+          - new_bin.stat.exists
+          - new_bin.stat.executable
+        fail_msg: "JDK 21.0.2 did not install: {{ new_bin.stat }}"
+
+    - name: Stat the /usr/local/bin java symlink
+      ansible.builtin.stat:
+        path: /usr/local/bin/java
+      register: symlink
+
+    - name: Assert the java symlink retargeted at 21.0.2
+      ansible.builtin.assert:
+        that:
+          - symlink.stat.islnk
+          - symlink.stat.lnk_target == new_dir ~ '/bin/java'
+        fail_msg: >-
+          /usr/local/bin/java did not retarget at 21.0.2; stat: {{ symlink.stat }}
+
+    - name: Run the symlinked java
+      ansible.builtin.command: java
+      changed_when: false
+      register: java_run
+
+    - name: Assert the active java reports 21.0.2
+      ansible.builtin.assert:
+        that:
+          - "'jdk 21.0.2+13 fixture' in java_run.stdout"
+        fail_msg: "Active java is not 21.0.2: {{ java_run.stdout }}"
+
+    - name: Slurp the profile.d script
+      ansible.builtin.slurp:
+        src: /etc/profile.d/jdk.sh
+      register: profile_script
+
+    - name: Assert the profile.d script points at 21.0.2
+      ansible.builtin.assert:
+        that:
+          - "'JAVA_HOME=' ~ new_dir in (profile_script.content | b64decode)"
+        fail_msg: >-
+          /etc/profile.d/jdk.sh still points at the old version:
+          {{ profile_script.content | b64decode }}
+
+    - name: Assert the 21.0.2 manifest is present
+      ansible.builtin.stat:
+        path: "{{ new_manifest }}"
+      register: new_manifest_stat
+
+    - name: Fail if the 21.0.2 manifest is missing
+      ansible.builtin.assert:
+        that:
+          - new_manifest_stat.stat.exists
+        fail_msg: "The JDK 21.0.2 manifest is missing after the swap."

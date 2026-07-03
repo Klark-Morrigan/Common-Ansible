@@ -1,0 +1,26 @@
+---
+# Role metadata for the dotnet_sdk role. Kept minimal - galaxy_info is
+# present so ansible-lint's role-metadata checks pass and the role is
+# self-describing without implying this repo publishes to Galaxy (it does
+# not; consumers take a sibling checkout - see the repo README "Consuming
+# the substrate").
+galaxy_info:
+  role_name: dotnet_sdk
+  author: Infrastructure
+  description: >-
+    Resolve a .NET SDK channel + version pin and install / swap /
+    uninstall it via the host-push toolchain pattern.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+
+# This role delegates its install/uninstall mechanics to
+# toolchain_host_push via include_role at runtime (tasks/main.yml), not a
+# meta dependency: a meta dependency would run toolchain_host_push's tasks
+# BEFORE this role resolves the version pin into the desired set it must
+# pass in. The include is the correct ordering seam. Same reasoning as the
+# jdk role.
+dependencies: []

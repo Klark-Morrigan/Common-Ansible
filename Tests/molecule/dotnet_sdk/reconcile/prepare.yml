@@ -1,0 +1,38 @@
+---
+# Prepare the version-swap scenario: bring the fixture up serving BOTH
+# 10.0.100 and 10.0.101 on channel 10.0, then install 10.0.100 by applying
+# the role with an exact pin. Converge then desires 10.0.101, so the pattern
+# swaps. Exact pins are used both sides so the swap targets a specific
+# version regardless of latest-sdk.
+
+- name: Prepare - fixture up, then install .NET SDK 10.0.100
+  hosts: all
+  gather_facts: false
+  vars:
+    fixture_port: 18832
+    fixture_stage_dir: /var/lib/dotnet-fixture/srv
+    fixture_build_dir: /var/lib/dotnet-fixture/build
+    fixture_api_prefix: dotnet/release-metadata
+    fixture_channel: "10.0"
+    fixture_latest_sdk: "10.0.101"
+    fixture_sdks:
+      - version: "10.0.101"
+        archive: dotnet-sdk-10.0.101-linux-x64.tar.gz
+      - version: "10.0.100"
+        archive: dotnet-sdk-10.0.100-linux-x64.tar.gz
+    # Play-level so the shared (unprefixed) bridge var is not scoped to the
+    # include_role below (ansible-lint's no-role-prefix rule only fires on
+    # vars passed under a role task).
+    dotnet_sdk_releases_base_url: http://127.0.0.1:18832/dotnet/release-metadata
+    host_file_server_base_url: http://127.0.0.1:18832
+  tasks:
+    - name: Bring the fixture http server up (serves 10.0.100 and 10.0.101)
+      ansible.builtin.include_tasks: ../tasks/_fixture-dotnet.yml
+
+    - name: Install .NET SDK 10.0.100 as the pre-swap baseline
+      ansible.builtin.include_role:
+        name: dotnet_sdk
+      vars:
+        dotnet_sdk_versions:
+          - channel: "10.0"
+            version: "10.0.100"

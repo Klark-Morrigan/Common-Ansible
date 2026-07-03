@@ -1,0 +1,20 @@
+---
+# Converge - desire 10.0.101 where prepare installed 10.0.100. The pattern
+# uninstalls the stale 10.0.100 (dir, symlink, profile, install_location,
+# manifest) BEFORE installing 10.0.101, so the shared /usr/local/bin/dotnet
+# symlink and /etc/dotnet/install_location are freed then repointed at
+# 10.0.101.
+
+- name: Converge - swap .NET SDK 10.0.100 -> 10.0.101
+  hosts: all
+  gather_facts: false
+  vars:
+    dotnet_sdk_releases_base_url: http://127.0.0.1:18832/dotnet/release-metadata
+    host_file_server_base_url: http://127.0.0.1:18832
+    dotnet_sdk_versions:
+      - channel: "10.0"
+        version: "10.0.101"
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: dotnet_sdk

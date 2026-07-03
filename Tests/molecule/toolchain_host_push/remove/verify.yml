@@ -1,0 +1,59 @@
+---
+# Verify the post-remove state: every faketool 1.0.0 artifact is gone and
+# the role's installed fact is empty. Covers the plan's
+# "uninstall-removed-versions" case.
+
+- name: Verify - faketool removal post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    manifest_path: /var/lib/common-ansible/toolchains/manifests/faketool-1.0.0.json
+    # Play-level so the shared (unprefixed) bridge var is not scoped to
+    # the include_role below (ansible-lint's no-role-prefix rule only
+    # fires on vars passed under a role task).
+    host_file_server_base_url: http://127.0.0.1:18813
+  tasks:
+    - name: Stat every artifact the install owned
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: artifacts
+      loop:
+        - /opt/faketool-1.0.0
+        - /usr/local/bin/faketool
+        - /etc/profile.d/faketool.sh
+        - "{{ manifest_path }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Assert every faketool artifact was removed
+      ansible.builtin.assert:
+        that:
+          - >-
+            (artifacts.results | map(attribute='stat.exists') | list)
+            == [false, false, false, false]
+        fail_msg: >-
+          One or more faketool artifacts survived removal:
+          {{
+            dict(
+              artifacts.results | map(attribute='item')
+              | zip(artifacts.results | map(attribute='stat.exists'))
+            )
+          }}
+
+    # Re-run the role read-side so its installed fact is observable here:
+    # with the manifest gone the recorded set must be empty.
+    - name: Re-apply the role with an empty desired set to expose the fact
+      ansible.builtin.include_role:
+        name: toolchain_host_push
+        public: true
+      vars:
+        toolchain_host_push_name: faketool
+        toolchain_host_push_versions: []
+
+    - name: Assert the installed-versions fact is empty
+      ansible.builtin.assert:
+        that:
+          - toolchain_host_push_installed | length == 0
+        fail_msg: >-
+          The installed-versions fact is not empty after removal:
+          {{ toolchain_host_push_installed }}

@@ -18,7 +18,8 @@ single committable act with its reason, tests, and a diagram.
 - [Section 7 - bats role](#section-7---bats-role)
 - [Section 8 - docker role](#section-8---docker-role)
 - [Section 9 - Config schema, wire the runner VM, verify green](#section-9---config-schema-wire-the-runner-vm-verify-green)
-- [Section 10 - Ordered cross-repo merge](#section-10---ordered-cross-repo-merge)
+- [Section 10 - Decouple Common-Ansible from the provisioner](#section-10---decouple-common-ansible-from-the-provisioner)
+- [Section 11 - Ordered cross-repo merge](#section-11---ordered-cross-repo-merge)
 
 ## Conventions
 
@@ -623,10 +624,17 @@ criterion in 5.6.
 
 Build the shared mechanics one role models: pull a host-staged tarball
 via the substrate file server, unarchive to a versioned install dir,
-manage `/usr/local/bin` symlinks and `/etc/profile.d/<tool>.sh`, record
-installed versions as a fact, and remove versions no longer desired (the
-one capability Ansible does not give for free, per
-[Solution approach](problem.md#solution-approach)).
+manage `/usr/local/bin` symlinks (either an explicit per-version list, or
+`symlink_bin_dir` - a subdir whose files are all symlinked, enumerated at
+install time, for a tool like the JDK whose launcher set is only known
+post-extraction; both record every link in the manifest so uninstall
+stays glob-free) and `/etc/profile.d/<tool>.sh`, write any fixed config
+files a tool needs *outside* its install dir (an optional per-version
+`owned_files` list - e.g. .NET's `/etc/dotnet/install_location`; each is
+recorded in the manifest and removed on uninstall, never its shared parent
+dir, so removal stays glob-free too), record installed versions as a fact,
+and remove versions no longer desired (the one capability Ansible does not
+give for free, per [Solution approach](problem.md#solution-approach)).
 
 - **Reason:** Establishes the section-1 pattern so JDK/.NET roles differ
   only in their resolve/version logic.
@@ -642,6 +650,7 @@ flowchart TD
   PULL --> UNP[unarchive to /opt/tool-version]
   UNP --> LN[symlink /usr/local/bin]
   UNP --> PD[/etc/profile.d/tool.sh/]
+  UNP --> OF[owned_files e.g. /etc/dotnet/install_location]
   LN --> FACT[record installed fact]
   FACT --> DIFF{desired vs installed}
   DIFF -->|stale| RM[remove old version]
@@ -649,13 +658,34 @@ flowchart TD
 
 ### Step 5.2 - jdk role
 
-Port `JdkProvider` (Adoptium resolve + install/uninstall) onto 5.1.
+Port `JdkProvider` onto 5.1. The role adds only resolve/version logic: it
+translates an operator pin (`21`, `21.0`, `21.0.5`, `21.0.5+11`) against
+the Adoptium v3 GA API into a concrete `{version, archive}` (also
+capturing the release checksum and download URL), then delegates install
+/ swap / uninstall to the 5.1 pattern - `symlink_bin_dir: bin` to link
+every JDK launcher, plus a `JAVA_HOME` + `PATH` profile. v1 installs one
+JDK per host (a longer desired list is a hard error, mirroring
+`Get-JdkDesiredVersions`). The Adoptium metadata query runs on the target
+(only the large tarball uses the file-server NAT-bypass), so a fleet whose
+targets cannot reach `api.adoptium.net` overrides the API base at a mirror.
+
+The role does **not** verify the tarball checksum at install: it pulls
+from the trusted substrate file server, and Adoptium byte-integrity is the
+concern of the acquisition/staging step that fetches the tarball from
+Adoptium and stages it on that file server ([Step 5.5](#step-55---toolchain-targeting-flow-in-a-consumer-repo)).
+This is the same acquire/install split the PowerShell reconciler drew -
+`Invoke-JdkAcquisition` verified the hash, `Install-JdkVersion` only
+extracted. The resolver surfaces the checksum precisely so the staging
+layer has it.
 
 - **Reason:** First real consumer of the section-1 pattern; proves parity
   with the reconciler.
-- **Tests:** molecule - install a pinned JDK, swap versions, uninstall.
-- **README:** `jdk` role README (purpose, variables, the Adoptium
-  resolve/install behaviour it adds on the 5.1 pattern).
+- **Tests:** molecule - install a pinned JDK, swap versions, uninstall,
+  each driven by an in-container fixture serving both a canned Adoptium
+  response and the fake tarballs (so resolve and install run end to end
+  without the real API).
+- **README:** `jdk` role README (purpose, variables, the resolution
+  granularity table, and where checksum verification lives).
 
 ```mermaid
 flowchart LR
@@ -700,24 +730,70 @@ or the runner owner), never in Common-Ansible, to keep the substrate
 naming honest (see
 [Why Common-, not Infrastructure-](problem.md#why-common--not-infrastructure)).
 
+This step also owns **acquisition and staging**: fetching each resolved
+toolchain tarball from upstream (Adoptium for the JDK), verifying the
+release checksum the role surfaced, and staging it on the substrate host
+file server under the resolved archive name the role pulls by. The roles
+(5.1-5.4) deliberately do not re-verify at install (they pull from the
+trusted file server) - staging is the integrity gate, the acquire/install
+split the PowerShell reconciler drew. Staging must pin the resolution it
+stages so the role's install-time resolve cannot pick a newer Adoptium
+build than the one staged (the role re-resolves on the target); the
+PowerShell reconciler pinned this via a per-cache lockfile, and the
+consumer flow needs the equivalent pin here.
+
 - **Reason:** Separates "reusable roles" (substrate) from "who gets what
-  on which box" (a deploying consumer).
-- **Tests:** Integration - run the flow against a disposable VM and assert
-  the toolchain is present and on PATH.
+  on which box" (a deploying consumer), and puts upstream fetch +
+  integrity verification with the consumer that owns the estate's egress.
+- **Tests:** Unit (in the consumer repo) - a tampered/mismatched checksum
+  fails staging before anything reaches the VM, asserted against the
+  acquire/verify/stage step with the resolvers and downloads stubbed. The
+  live end-to-end assertion - the flow run against a disposable VM with the
+  toolchain present and on PATH - runs through Infrastructure-E2E on PR, not
+  as an in-repo suite, so live-Hyper-V coverage stays in the E2E repo.
 - **README:** Document the toolchain targeting flow (playbook +
-  inventory) in the consumer repo's README; this repo's README only
-  references the reusable roles it consumes.
+  inventory) and the acquire-verify-stage step in the consumer repo's
+  README; this repo's README only references the reusable roles it
+  consumes.
+
+Target flow (this step):
 
 ```mermaid
 flowchart LR
   subgraph CON[consumer repo]
+    ACQ[acquire + verify checksum + stage]
     PB[toolchain playbook + inventory]
   end
+  UP[(Adoptium / upstream)] --> ACQ
+  ACQ -->|staged tarball| HFS[(substrate host file server)]
+  CA[(Common-Ansible substrate)] -->|reusable roles| PB
   PB --> JR[jdk role]
   PB --> DR[dotnet roles]
-  JR --> CA[(Common-Ansible substrate)]
-  DR --> CA
+  JR -->|pull by name| HFS
+  DR -->|pull by name| HFS
+  JR -->|install| VM[(target VM)]
+  DR -->|install| VM
 ```
+
+Prior flow (the PowerShell reconciler this replaces), shown for contrast -
+one monolithic engine on the controller did resolve, acquire+verify, and
+push-install per VM, with no substrate/consumer split:
+
+```mermaid
+flowchart LR
+  subgraph REC[PowerShell reconciler on the controller]
+    RES[resolve version]
+    ACQ2[acquire + verify checksum + host cache]
+    INST[Install-Version over SSH]
+  end
+  UP2[(Adoptium / upstream)] --> ACQ2
+  RES --> ACQ2 --> INST
+  INST -->|stream tarball + extract| VM[(target VM)]
+```
+
+The split is the point of the contrast: the target flow moves upstream
+fetch + integrity into a deploying consumer and the install mechanics into
+reusable substrate roles, where the prior engine fused all three.
 
 ### Step 5.6 - Define the cutover criterion; keep the PS reconciler as a fork
 
@@ -737,6 +813,75 @@ production runner with parity on install/swap/uninstall.
 flowchart LR
   PS[PS reconciler - fork] -. retire when .-> CRIT[Ansible parity proven on prod]
   ANS[Ansible toolchain flow] --> CRIT
+```
+
+### Step 5.7 - Slice the Vm-Provisioner PowerShell reconciler into per-impl folders
+
+Reorganize Infrastructure-Vm-Provisioner's flat `hyper-v/ubuntu/` tree into
+the same self-contained per-impl slices the other consumers already carry
+(Step 4.1): `shared/`, `PowerShell/`, `Ansible/`. The `Ansible/` slice
+already exists (Step 5.5). Move the PowerShell reconciler - `common/`,
+`up/`, `down/`, `provision.ps1`, `deprovision.ps1`, `ensure-vms-ready.ps1`,
+`start-vms.ps1`, `Install-ModuleDependencies.ps1` - into `PowerShell/`, and
+`setup-secrets.ps1` (the vault writer both impls read) into `shared/`.
+
+The tree moves as a unit, so the reconciler's own `$PSScriptRoot`-relative
+dot-sources survive untouched; the seams that break are the references from
+outside the moved tree:
+
+- the `.menu` files (`menus.psd1`, `cluster-order.psd1`,
+  `manual-dependencies.psd1`, `Get-ScenarioMenus.ps1`) that resolve this
+  repo's entry scripts by path;
+- Infrastructure-E2E's resolution of `provision.ps1` / `deprovision.ps1`
+  (and the `setup-secrets.ps1` writer);
+- every `Tests/` dot-source path - Tests mirrors production, so the Tests
+  tree reorganizes in lockstep;
+- Step 5.5's `Stage-ToolchainArtifacts.ps1`, whose reuse-reach into the
+  reconciler resolvers (`..\..\up\jdk\Resolve-AdoptiumRelease.ps1`,
+  `..\..\up\dotnet\Resolve-DotnetSdkRelease.ps1`) becomes
+  `..\..\PowerShell\up\...`;
+- the CI runner shims and README paths that name the moved scripts.
+
+The `Ansible/ops/imports/` sibling-root resolvers are unaffected: they walk
+six levels to the repo root and `Ansible/` stays at
+`hyper-v/ubuntu/Ansible/`, so the Common-Ansible / Common-Automation sibling
+resolution needs no change.
+
+- **Reason:** One repo layout across the fleet - `shared` / `PowerShell` /
+  `Ansible` means the same thing in every consumer - so the two toolchain
+  impls (the PS reconciler and the Step 5.5 Ansible flow) are self-contained
+  slices rather than a flat tree with an `Ansible/` subfolder bolted on.
+  Recorded tension: the reconciler is slated for retirement at the 5.6
+  cutover, so this is a deliberate symmetry choice that accepts churn on
+  transitional code; kept a pure move (no behaviour change) to bound it.
+- **Tests:** Pure relocation, no behaviour change - coverage must not
+  regress. The existing Pester suite is green after its dot-source paths are
+  repointed; provision / deprovision / ensure-vms-ready / start-vms still
+  dispatch from `PowerShell/`; Step 5.5's toolchain Pester is green after its
+  `..\..\PowerShell\up\...` update; the `.menu` loads and resolves the moved
+  entry scripts; Infrastructure-E2E resolves the moved `provision.ps1` /
+  `deprovision.ps1`.
+- **README:** Update Infrastructure-Vm-Provisioner's README "Repo structure"
+  and every script path it names to the sliced layout, and note the `shared`
+  / `PowerShell` / `Ansible` slice convention it now shares with the other
+  consumers; Infrastructure-E2E's docs that name the resolved paths update in
+  lockstep. This repo's (Common-Ansible) README is unchanged.
+
+```mermaid
+flowchart LR
+  subgraph before[flat]
+    F1[common / up / down / reconciler *.ps1]
+    F2[Ansible/ slice from 5.5]
+  end
+  subgraph after[sliced]
+    S[shared/: setup-secrets.ps1]
+    P[PowerShell/: common / up / down / reconciler *.ps1]
+    A[Ansible/: toolchain flow]
+  end
+  F1 --> P
+  F1 --> S
+  F2 --> A
+  P -. seams repointed .-> SEAMS[.menu / E2E / Tests / 5.5 dot-source]
 ```
 
 ## Section 6 - shellcheck role
@@ -877,7 +1022,175 @@ flowchart LR
   VM --> CD[ci-dotnet green]
 ```
 
-## Section 10 - Ordered cross-repo merge
+## Section 10 - Decouple Common-Ansible from the provisioner
+
+Severs the residual substrate -> Vm-Provisioner coupling described in
+[problem.md](problem.md#the-residual-provisioner-coupling-severed-last): a
+mismodeled menu edge, the implicit inventory shape, and the embedded estate
+topology. Independent of Sections 5-9 (A and B could be pulled earlier);
+grouped here as the substrate-cleanliness finish, before the merge. C-2
+lands code in other repos, so it must precede Section 11.
+
+### Step 10.1 - Decouple the substrate from the provisioner (A / B / C-1 / C-2)
+
+Four committable substeps in increasing depth: drop the false edge, own the
+inventory contract, introduce the transport hook, then relocate the Hyper-V
+implementation behind it. Each is reviewed and committed on its own.
+
+#### Step 10.1.A - Drop the mismodeled menu edge and re-settle the Level
+
+Remove `'Common-Ansible' = @('Infrastructure-Vm-Provisioner')` from
+`.menu/lib/Dependencies/manual-dependencies.psd1`. The substrate has no
+code, build, or operational dependency on the provisioner repo: the
+inventory vault name is consumer-declared (`CA_INVENTORY_VAULT`) and the
+bats stub every vault read. The "provision first" ordering already lives on
+the consumers (Vm-Users / GitHubRunners), which carry both edges. With the
+false edge gone, raise Common-Ansible's `Level` in `.menu/menus.psd1` out of
+the consumer tier into the shared-foundation tier (it no longer ranks below
+Vm-Provisioner).
+
+- **Reason:** A false edge mismodels the dependency gradient and pins the
+  substrate below a repo it does not depend on.
+- **Tests:** `menus.psd1` parses; `Get-ReposInGroup` ordering shows
+  Common-Ansible in the foundation tier; the rebuilt dependency index no
+  longer lists the edge. Menu metadata only - no repo code.
+- **README:** None (workspace-orchestration metadata; no repo README).
+
+```mermaid
+flowchart LR
+  subgraph before
+    P1[Vm-Provisioner] -->|false edge| CA1[Common-Ansible]
+  end
+  subgraph after
+    CA2[Common-Ansible: foundation tier]
+    P2[Vm-Provisioner]
+  end
+```
+
+#### Step 10.1.B - Make the inventory shape a substrate-owned contract
+
+Document the fleet-inventory JSON shape - hosts with
+`vmName`/`ipAddress`/`username`/`password`, plus the optional
+`kind=="router"` row (`externalSwitchName`, optional static `ipAddress`) -
+as Common-Ansible's *input contract*, in the repo README and a contract doc
+under `docs/`. Add a `jq` shape-assertion in
+`ops/virtual-machines/_build-inventory.sh` (and harden the existing
+router-row field check in `_resolve-router.sh`) that fails loud, naming the
+offending record and the missing field, when a provider payload omits a
+required field - so a malformed inventory fails at the substrate boundary
+with a clear message instead of deep inside ansible-playbook.
+
+The `vm_provisioner_config` extra-vars key / `--provisioner-config` flag are
+left as-is: renaming them to a neutral `fleet_inventory` is a contract change
+touching every role and both consumers (and the version bump), out of scope
+here and deferred.
+
+- **Reason:** Turns an implicit, reverse-engineered shape into an explicit
+  substrate-owned contract providers conform to - the inversion that removes
+  the substrate -> provider arrow at the data layer.
+- **Tests:** bats (`Tests/ops`) - `_build-inventory.sh` rejects a record
+  missing `vmName` / `ipAddress` with a named error and accepts a valid
+  fleet; the documented contract fields match the asserted set.
+- **README:** Add an "Inventory contract" section to Common-Ansible's README
+  defining the shape the substrate consumes.
+
+```mermaid
+flowchart LR
+  PROV[Vm-Provisioner output] -->|conforms to| C[(inventory contract)]
+  C -->|asserted by| BI[_build-inventory.sh]
+```
+
+#### Step 10.1.C-1 - Introduce the transport-resolution hook (substrate-only, no move)
+
+Define an explicit hook: `CA_TRANSPORT_RESOLVER` names a script the bridge
+sources to resolve the SSH transport for a NAT/router topology, exporting
+`ROUTER_IP` / `ROUTER_SSH_HOST` / `ROUTER_USERNAME` / `SSHPASS` /
+`ROUTER_PORT`, or doing nothing for a single-switch fleet. Unset selects a
+built-in no-op default (CI, native Linux, direct-routing fleets). Route
+`ops/_run-playbook.sh` through the hook instead of sourcing
+`_resolve-router.sh` directly; `_resolve-router.sh` stays in the substrate
+for now as the default provider the hook points at. No code moves and no
+behaviour changes - this only inverts the dependency: the bridge depends on
+the hook *contract*, not on the estate-specific resolver.
+
+The seam is explicit (a consumer-supplied path), not sibling-discovery, on
+purpose: an implicit seam that located the resolver in a Vm-Provisioner
+checkout would make the substrate name that repo and re-introduce exactly
+the edge 10.1.A removed.
+
+- **Reason:** Establishes the interface so the Hyper-V implementation can
+  leave in C-2 without the substrate ever naming a platform or a repo.
+- **Tests:** bats (`Tests/ops`) - no-router-row fleets stay an unchanged
+  no-op; with `CA_TRANSPORT_RESOLVER` set to a stub that exports `ROUTER_*`,
+  `_build-inventory.sh` emits the ProxyCommand `ansible_ssh_common_args`
+  aimed at the stub's `ROUTER_SSH_HOST`; an unset hook keeps the direct
+  path. E2E runner-lifecycle stays green (the default still resolves
+  Hyper-V).
+- **README:** Document the `CA_TRANSPORT_RESOLVER` hook contract (exported
+  vars, no-op default) in Common-Ansible's README.
+
+```mermaid
+flowchart LR
+  RP[_run-playbook.sh] -->|sources| H{{CA_TRANSPORT_RESOLVER}}
+  H -->|unset| NOOP[no-op default]
+  H -->|set| RES[resolver provider]
+  RES -.default still bundled.-> RR[_resolve-router.sh in substrate]
+```
+
+#### Step 10.1.C-2 - Relocate the Hyper-V implementation behind the hook
+
+Pure move: lift `ops/virtual-machines/_resolve-router.sh` (and its sibling
+`_assert-router-reachable.sh`) out of the substrate to the chosen estate
+home, reusing the platform primitives that already live there -
+`Get-VmKvpIpAddress` (`Infrastructure.HyperV`), netsh portproxy
+(`Infrastructure-Network-Windows`), and the router-row semantics
+(`Infrastructure-Vm-Provisioner`). The consumers (Vm-Users / GitHubRunners)
+point `CA_TRANSPORT_RESOLVER` at the relocated resolver; the substrate drops
+its bundled copy, keeping only the hook contract and the no-op default.
+PowerShell helpers landing alongside Bash in the target repo is accepted.
+
+> **Open decision (settle before this substep runs): the resolver's home.**
+> Recommended single home is `Infrastructure-Vm-Provisioner` - it *creates*
+> the netsh portproxy this resolver *discovers*, so create and discover are
+> colocated, and the consumers already depend on it. A dedicated estate repo
+> is the alternative if even a consumer -> Vm-Provisioner resolver edge is
+> unwanted. Either way this does not re-couple the *substrate*: the hook is
+> consumer-supplied (10.1.C-1), so the substrate still names no repo.
+
+The host file server (`_stage-host-fileserver.sh` +
+`_start`/`_stop-host-file-server.ps1`) is also Windows-specific but is a
+separate, already-parameterized concern; relocating it behind the same
+pattern is a future step, not part of 10.1.
+
+- **Reason:** Removes the last estate-specific code from the substrate; the
+  Hyper-V coupling becomes one provider behind the C-1 hook, so a
+  non-Hyper-V consumer supplies its own resolver (or the no-op) without
+  forking the substrate.
+- **Tests:** The relocated resolver's bats move with it to its new repo and
+  pass there; the substrate's bats cover only the hook + no-op (the
+  estate-specific cases leave with the code); E2E runner-lifecycle is green
+  with the consumers pointing `CA_TRANSPORT_RESOLVER` at the relocated
+  resolver.
+- **README:** The substrate README drops the resolver internals and points
+  at the hook; the target repo's README documents the Hyper-V/ICS resolver
+  it now owns.
+
+```mermaid
+flowchart LR
+  subgraph SUB[Common-Ansible substrate]
+    H{{CA_TRANSPORT_RESOLVER hook}}
+    NOOP[no-op default]
+  end
+  subgraph EST[estate home - TBD]
+    RES[_resolve-router.sh + _assert-router-reachable.sh]
+    PRIM[Get-VmKvpIpAddress / netsh portproxy]
+  end
+  CONS[Vm-Users / GitHubRunners] -->|set CA_TRANSPORT_RESOLVER| H
+  H --> RES
+  RES --> PRIM
+```
+
+## Section 11 - Ordered cross-repo merge
 
 The closing step. Up to here each repo's branch carries its own step
 commits; this is where every repo's PR is finalized and merged in
@@ -885,7 +1198,7 @@ dependency order. Scoped checkout consumes the substrate from a
 Common-Ansible sibling on `master`, so there is no artifact to publish -
 the ordering is what matters.
 
-### Step 10.1 - Finalize and merge each repo PR in dependency order
+### Step 11.1 - Finalize and merge each repo PR in dependency order
 
 Merge Common-Ansible first so the substrate (roles + bridge) is on
 `master`, then the consumers - Infrastructure-Vm-Users,

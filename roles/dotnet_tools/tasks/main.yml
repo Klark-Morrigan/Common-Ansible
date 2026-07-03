@@ -1,0 +1,119 @@
+---
+# dotnet_tools role entry point. Reconcile the installed set of .NET global
+# tools against the desired list (dotnet_tools_tools), mirroring the
+# manifest-driven three-part diff toolchain_host_push uses for tarball
+# toolchains - but with `dotnet tool` install/uninstall mechanics instead of
+# tarball extract, so the diff skeleton is shared in spirit, not by
+# delegation:
+#   1. Read the on-disk tool manifests -> the installed set (a fact so the
+#      diff, and any consumer, can inspect it).
+#   2. Uninstall every installed tool no longer desired FIRST, so a version
+#      swap frees the shared /usr/local/bin shim symlink before the incoming
+#      version claims it.
+#   3. Install every desired tool not yet installed.
+#
+# Diff identity is the composite "<id>@<version>" (see defaults/main.yml):
+# two tools can share a bare NuGet version, so the diff keys on the pair.
+#
+# An empty dotnet_tools_tools yields an empty desired set, so the reconcile
+# uninstalls every tool it has a manifest for - the same set-difference
+# removal every toolchain gets. That path needs the dotnet driver present
+# (`dotnet tool uninstall` runs), which is why a teardown play removes tools
+# BEFORE the SDK (defaults/main.yml, README).
+
+- name: Ensure the tool manifest, staging, and tools-root directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  loop:
+    - "{{ dotnet_tools_manifest_dir }}"
+    - "{{ dotnet_tools_staging_base }}"
+    # Created here (not left to the first install) so the pre-install shim
+    # enumeration in _install-tool.yml can `find` it unconditionally, and
+    # so an uninstall-only run has a valid tool-path for the driver.
+    - "{{ dotnet_tools_root }}"
+
+# List this role's manifests. The 'dotnettool-*' prefix scopes the find to
+# tools only, keeping the shared manifest store partitioned from the SDK's
+# 'dotnet-*.json'. The dir was just created, so find always returns a
+# (possibly empty) list.
+- name: Find existing tool manifests
+  ansible.builtin.find:
+    paths: "{{ dotnet_tools_manifest_dir }}"
+    patterns: "dotnettool-*.json"
+    file_type: file
+  become: true
+  register: dotnet_tools_manifest_files
+
+- name: Read each existing tool manifest
+  ansible.builtin.slurp:
+    src: "{{ item }}"
+  become: true
+  loop: >-
+    {{ dotnet_tools_manifest_files.files | map(attribute='path') | list }}
+  loop_control:
+    label: "{{ item }}"
+  register: dotnet_tools_manifest_slurp
+
+# Project the manifests into the installed-tools fact. Each element is the
+# parsed manifest dict (id, version, key, install_dir, symlinks, commands);
+# the diff below keys off .key.
+- name: Record the installed tools as a fact
+  ansible.builtin.set_fact:
+    dotnet_tools_installed: >-
+      {{ dotnet_tools_manifest_slurp.results
+         | map(attribute='content')
+         | map('b64decode')
+         | map('from_json')
+         | list }}
+
+# Stamp the composite diff key onto each desired entry so the stale/missing
+# set-difference below can reject by a single attribute. Built in a loop
+# (Jinja has no per-item combine over a bare list in one filter) and seeded
+# via default([]) so an empty desired set leaves an empty list, not undefined.
+- name: Build the desired tool set with composite keys
+  ansible.builtin.set_fact:
+    dotnet_tools_desired: >-
+      {{ dotnet_tools_desired | default([])
+         + [item | combine({'key': item.id ~ '@' ~ item.version})] }}
+  loop: "{{ dotnet_tools_tools }}"
+  loop_control:
+    label: "{{ item.id }}@{{ item.version }}"
+
+# Split installed into "stale" (has a manifest but no longer desired) and
+# derive "missing" (desired but no manifest). rejectattr(... 'in' ...) keeps
+# items whose key is NOT in the other set's key list.
+- name: Compute the stale and missing tool sets
+  ansible.builtin.set_fact:
+    dotnet_tools_stale: >-
+      {{ dotnet_tools_installed
+         | rejectattr('key', 'in',
+             dotnet_tools_desired | default([]) | map(attribute='key') | list)
+         | list }}
+    dotnet_tools_missing: >-
+      {{ dotnet_tools_desired | default([])
+         | rejectattr('key', 'in',
+             dotnet_tools_installed | map(attribute='key') | list)
+         | list }}
+
+# Uninstall stale tools BEFORE installing missing ones: a swap
+# ({id@v1} -> {id@v2}) removes v1's /usr/local/bin shim symlink here, then
+# the install below re-creates it for v2. Installing first would let v1's
+# uninstall delete the shim v2 just claimed (both own the same command name).
+- name: Uninstall tools no longer desired
+  ansible.builtin.include_tasks: _uninstall-tool.yml
+  loop: "{{ dotnet_tools_stale }}"
+  loop_control:
+    loop_var: dotnet_tools_stale_entry
+    label: "{{ dotnet_tools_stale_entry.key | default(dotnet_tools_stale_entry.id) }}"
+
+- name: Install desired tools not yet present
+  ansible.builtin.include_tasks: _install-tool.yml
+  loop: "{{ dotnet_tools_missing }}"
+  loop_control:
+    loop_var: dotnet_tools_target
+    label: "{{ dotnet_tools_target.key }}"

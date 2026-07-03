@@ -1,0 +1,18 @@
+---
+# Converge - desire 21.0.2 where prepare installed 21.0.1. The pattern
+# uninstalls the stale 21.0.1 (dir, symlinks, profile, manifest) BEFORE
+# installing 21.0.2, so the shared /usr/local/bin/java symlink is freed
+# then retargeted at 21.0.2.
+
+- name: Converge - swap JDK 21.0.1 -> 21.0.2
+  hosts: all
+  gather_facts: false
+  vars:
+    jdk_adoptium_api_base_url: http://127.0.0.1:18822/adoptium/v3
+    host_file_server_base_url: http://127.0.0.1:18822
+    jdk_versions:
+      - "21.0.2"
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: jdk
