@@ -15,6 +15,8 @@ set -euo pipefail
 source "${BASH_SOURCE[0]%/*}/../_validate-extra-vars-input.sh"
 # shellcheck source=ops/_die-on-unknown-flag.sh
 source "${BASH_SOURCE[0]%/*}/../_die-on-unknown-flag.sh"
+# shellcheck source=ops/virtual-machines/_validate-toolchains-config.sh
+source "${BASH_SOURCE[0]%/*}/_validate-toolchains-config.sh"
 
 provisioner_path=""
 
@@ -40,6 +42,14 @@ if [[ -z "${provisioner_path}" ]]; then
 fi
 
 _validate_extra_vars_input --provisioner-config "${provisioner_path}"
+
+# The config is surfaced whole under vm_provisioner_config, so the optional
+# `toolchains` taxonomy block rides along untouched. Validate its outer
+# shape here - at the surfacing point - so a malformed section fails with a
+# clear message before it reaches a consumer playbook (which dispatches each
+# section into a role var, past where the section boundary is still visible).
+# Entry-level rules stay with the roles that consume each section.
+_validate_toolchains_config "${provisioner_path}"
 
 # --slurpfile loads the document as a one-element array; `$p[0]`
 # extracts the document so it nests directly under the canonical key.

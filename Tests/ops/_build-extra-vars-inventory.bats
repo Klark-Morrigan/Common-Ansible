@@ -56,3 +56,19 @@ teardown() {
     [ "$(printf '%s' "${output}" | jq -r '.vm_provisioner_config[0].vmName')" = "a" ]
     [ "$(printf '%s' "${output}" | jq -r '.vm_provisioner_config[0].ipAddress')" = "10.0.0.1" ]
 }
+
+@test "a well-formed toolchains block rides through untouched" {
+    printf '%s' '[{"vmName":"a","toolchains":{"vmDownloaded":[{"name":"shellcheck"}]}}]' > "${PROV}"
+    run "${BASH_BIN}" "${SCRIPT}" --provisioner-config "${PROV}"
+    [ "${status}" -eq 0 ]
+    # Surfaced verbatim under the canonical key, ready for a consumer
+    # playbook's per-section dispatch.
+    [ "$(printf '%s' "${output}" | jq -r '.vm_provisioner_config[0].toolchains.vmDownloaded[0].name')" = "shellcheck" ]
+}
+
+@test "a malformed toolchains section fails the surfacing with a clear message" {
+    printf '%s' '[{"vmName":"a","toolchains":{"typo":[]}}]' > "${PROV}"
+    run "${BASH_BIN}" "${SCRIPT}" --provisioner-config "${PROV}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"VM a: unknown toolchains section(s): typo"* ]]
+}

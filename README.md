@@ -17,6 +17,7 @@ was extended by the feature step that earned it.
   - [Troubleshooting: WSL default distro has no bash](#troubleshooting-wsl-default-distro-has-no-bash)
   - [Troubleshooting: capturing logs and re-running an interrupted bootstrap](#troubleshooting-capturing-logs-and-re-running-an-interrupted-bootstrap)
 - [Bridge contract](#bridge-contract)
+  - [The toolchains taxonomy block (vm_provisioner_config.toolchains)](#the-toolchains-taxonomy-block-vm_provisioner_configtoolchains)
 - [Reusable roles](#reusable-roles)
   - [Host-push toolchain pattern (toolchain_host_push)](#host-push-toolchain-pattern-toolchain_host_push)
   - [JDK (jdk)](#jdk-jdk)
@@ -344,6 +345,52 @@ cross-cutting inputs the bridge forwards - the GitHub token (with
 (with `CA_NEEDS_HOST_FILE_SERVER=1`, register flow only) - reach the
 helper that consumes them and surface as that helper's keys. The
 inventory has one group `vm_provisioner_hosts` keyed by `vmName`.
+
+### The toolchains taxonomy block (vm_provisioner_config.toolchains)
+
+Each VM definition in the provisioner config carries an optional
+`toolchains` block declaring which tools land on that box, classified by
+**how each is acquired** (the three-section acquisition taxonomy):
+
+```json
+{
+  "vmName": "ubuntu-02-ci",
+  "toolchains": {
+    "hostPushed":   [ { "name": "jdk",        "version": "21.0.2+13" } ],
+    "vmDownloaded": [ { "name": "shellcheck", "version": "0.9.0-1"  } ],
+    "baseImage":    [ { "name": "docker" } ]
+  }
+}
+```
+
+- `hostPushed` - section 1: heavy artifacts the host caches once and
+  pushes over the file server (JDK, .NET SDK), consumed by the
+  [host-push roles](#host-push-toolchain-pattern-toolchain_host_push).
+- `vmDownloaded` - section 2: small packages the VM fetches itself,
+  consumed by [`toolchain_apt`](#section-2-apt-toolchain-pattern-toolchain_apt).
+- `baseImage` - section 3: daemons installed at a coarser grain,
+  consumed by the [`docker`](#section-3-docker-daemon-docker) role.
+
+The block lives in the existing per-VM secret (one per-VM SSOT); the
+config is surfaced whole under `vm_provisioner_config`, so the block rides
+along untouched and a consumer playbook dispatches each section into its
+roles' vars (the substrate ships no such playbook - that mapping is the
+consumer's, keeping the naming honest).
+
+Validation is split by ownership. The substrate validates only the
+**outer taxonomy shape** - at the surfacing point, in
+[`ops/virtual-machines/_validate-toolchains-config.sh`](ops/virtual-machines/_validate-toolchains-config.sh):
+the block must be an object, name none but the three known sections, and
+give each present section as a list; a violation fails the run with a
+message naming the VM and the offending section. Each toolchain **role**
+validates its own section's **entries** (e.g. `toolchain_apt` asserts
+every entry names a package). The section boundary is only visible before
+dispatch, so an unknown-section message can only come from the taxonomy
+layer - which is why the shape check lives here rather than in a role. The
+block is optional and absent-safe: a VM with no `toolchains` key validates
+and provisions exactly as before. The PowerShell config validator ignores
+the block (it validates required fields and tolerates extra keys), so the
+Ansible taxonomy and the reconciler schema coexist in one secret.
 
 `jq` is a hard runtime dependency (JSON validation, inventory and
 extra-vars composition); [`ops/_bootstrap-controller-wsl.sh`](ops/_bootstrap-controller-wsl.sh)
