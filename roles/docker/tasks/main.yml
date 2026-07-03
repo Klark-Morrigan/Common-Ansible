@@ -1,0 +1,156 @@
+---
+# Install the Docker CE engine from Docker's official apt repo, enable the
+# service, and add the desired users to the docker group. This is the
+# section-3 "daemon" mechanism (see defaults/main.yml): repo -> engine ->
+# service -> group, each step idempotent so a re-provision converges rather
+# than churns.
+
+# ---------------------------------------------------------------------
+# Repo: authorise and add Docker's official apt source
+# ---------------------------------------------------------------------
+
+# Prerequisites for adding the repo. ca-certificates gives apt/get_url a
+# trust store for download.docker.com; curl is Docker's documented fetch
+# tool and is cheap to guarantee; python3-debian is the library the
+# deb822_repository module below imports on the target (without it that
+# task fails with "No module named 'debian'"). Installed first so a minimal
+# cloud image that ships none of them does not fail the repo steps.
+- name: Install apt prerequisites for the Docker repo
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - python3-debian
+    state: present
+    update_cache: true
+    cache_valid_time: "{{ docker_apt_cache_valid_time }}"
+  become: true
+
+# Dedicated keyring directory. Docker's key lives under /etc/apt/keyrings
+# (0755, world-readable) rather than the deprecated apt trusted.gpg.d, so
+# the signed-by pin below can scope the key to Docker's source alone.
+- name: Ensure the apt keyring directory exists
+  ansible.builtin.file:
+    path: "{{ docker_apt_keyring_path | dirname }}"
+    state: directory
+    mode: "0755"
+  become: true
+
+# Fetch Docker's GPG signing key to the dedicated keyring. force is left at
+# its default (false): once the key exists the download is skipped, so this
+# task is a no-op on re-run (idempotent) and needs no external checksum -
+# the signed-by pin is what makes the key meaningful, and the URL is
+# TLS-authenticated. mode 0644 so apt (root) and its sandbox user can read
+# it while it stays non-writable by others.
+- name: Fetch the Docker apt signing key
+  ansible.builtin.get_url:
+    url: "{{ docker_apt_gpg_key_url }}"
+    dest: "{{ docker_apt_keyring_path }}"
+    mode: "0644"
+  become: true
+
+# The apt architecture (e.g. amd64/arm64) for the repo's arch filter.
+# Read from dpkg rather than ansible_facts so the role does not depend on
+# the play gathering facts. changed_when false - it only reads state.
+- name: Resolve the dpkg architecture
+  ansible.builtin.command: dpkg --print-architecture
+  register: docker_dpkg_arch
+  changed_when: false
+
+# The distro codename (e.g. noble) that selects Docker's per-release repo
+# suite. Sourced from /etc/os-release (guaranteed present on the target)
+# rather than lsb_release (not always installed), again avoiding a
+# gather_facts dependency.
+- name: Resolve the distro codename
+  ansible.builtin.shell:
+    cmd: . /etc/os-release && printf '%s' "$VERSION_CODENAME"
+  register: docker_os_codename
+  changed_when: false
+
+# Add Docker's apt source in deb822 format, signed-by the dedicated
+# keyring. deb822_repository is idempotent (it manages the whole .sources
+# file), and scoping the key with signed-by means this source - and only
+# this source - trusts Docker's key. A changed source triggers the cache
+# refresh below via the throttle being bypassed on first write.
+- name: Add the Docker apt repository
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: "{{ docker_apt_repo_base_url }}"
+    suites: ["{{ docker_os_codename.stdout }}"]
+    components: ["{{ docker_apt_repo_component }}"]
+    architectures: ["{{ docker_dpkg_arch.stdout }}"]
+    signed_by: "{{ docker_apt_keyring_path }}"
+    enabled: true
+  become: true
+  notify: Refresh apt cache for the Docker repo
+
+# Force the notified cache-refresh handler to run NOW, before the install
+# below, rather than at end-of-play (the default). The install in this same
+# run needs the refreshed cache to see docker-ce; a time-throttled refresh
+# would not work here because the prerequisites install above refreshed the
+# cache moments earlier, so a stale timestamp would treat it as fresh and
+# skip. Driving the refresh off the repo task's change (via the handler)
+# keeps the role idempotent: on a re-run the repo is unchanged, the handler
+# is not notified, and no refresh happens.
+- name: Flush handlers so the Docker repo cache refresh runs before install
+  ansible.builtin.meta: flush_handlers
+
+# ---------------------------------------------------------------------
+# Engine: install the Docker CE package set
+# ---------------------------------------------------------------------
+
+# Install the engine package set in one transaction. state present is
+# idempotent - an already-installed package is left unchanged. update_cache
+# is false here because the throttled task above already handled it;
+# refreshing again would defeat the throttle.
+- name: Install the Docker CE engine packages
+  ansible.builtin.apt:
+    name: "{{ docker_packages }}"
+    state: present
+    update_cache: false
+  become: true
+
+# ---------------------------------------------------------------------
+# Service: enable and start the daemon
+# ---------------------------------------------------------------------
+
+# Enable (survive reboot) and start the daemon. systemd_service is the
+# target's init on the production Ubuntu VMs; enabled+state is idempotent
+# (a running, enabled service reports no change). Named via the service
+# var so there is one source of truth for the unit name.
+- name: Enable and start the Docker service
+  ansible.builtin.systemd_service:
+    name: "{{ docker_service_name }}"
+    enabled: "{{ docker_service_enabled }}"
+    state: "{{ docker_service_state }}"
+  become: true
+
+# ---------------------------------------------------------------------
+# Group: socket access for the runner service user
+# ---------------------------------------------------------------------
+
+# Ensure the docker group exists. Installing docker-ce already creates it,
+# but ensuring it explicitly means the membership step has a group to add
+# to regardless of package-layout changes, and makes the role's group
+# contract self-evident rather than an install side effect.
+- name: Ensure the docker group exists
+  ansible.builtin.group:
+    name: "{{ docker_group }}"
+    state: present
+  become: true
+
+# Add each desired user to the docker group so it can reach the socket
+# without sudo. append: true is critical - it adds the docker group without
+# stripping the user's existing groups. Skipped cleanly when
+# docker_group_members is empty (the default). SECURITY: docker group
+# membership is root-equivalent; see defaults/main.yml.
+- name: Add the desired users to the docker group
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: "{{ docker_group }}"
+    append: true
+  become: true
+  loop: "{{ docker_group_members }}"
+  loop_control:
+    label: "{{ item }}"

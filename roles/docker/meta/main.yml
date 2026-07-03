@@ -1,0 +1,26 @@
+---
+# Role metadata for the docker role. Kept minimal - galaxy_info is present
+# so ansible-lint's role-metadata checks pass and the role is
+# self-describing without implying this repo publishes to Galaxy (it does
+# not; consumers take a sibling checkout - see the repo README "Consuming
+# the substrate").
+galaxy_info:
+  role_name: docker
+  author: Infrastructure
+  description: >-
+    Install the Docker CE engine from the official apt repo, enable the
+    service, and add the runner service user to the docker group.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+
+# This role installs the daemon and manages group membership using only
+# ansible.builtin modules (get_url, deb822_repository, apt,
+# systemd_service, group, user), so it has no collection or role
+# dependencies. community.docker manages containers on a running daemon,
+# which is a consumer concern - not installing the daemon - so it is
+# deliberately not pulled in here.
+dependencies: []

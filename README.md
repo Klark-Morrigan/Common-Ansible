@@ -23,6 +23,7 @@ was extended by the feature step that earned it.
   - [.NET SDK (dotnet_sdk)](#net-sdk-dotnet_sdk)
   - [.NET global tools (dotnet_tools)](#net-global-tools-dotnet_tools)
   - [Section-2 apt toolchain pattern (toolchain_apt)](#section-2-apt-toolchain-pattern-toolchain_apt)
+  - [Section-3 Docker daemon (docker)](#section-3-docker-daemon-docker)
 - [Tests and lint](#tests-and-lint)
 - [Consuming the substrate](#consuming-the-substrate)
 - [Feature folders](#feature-folders)
@@ -467,6 +468,27 @@ Its shipped use is shellcheck pinned to `0.9.0-1` (the apt candidate on the
 target's Ubuntu 24.04), which unblocks the `ci-bash` shellcheck step on the
 runner VM without a runtime install. Full var contract and the molecule
 scenario are in the [role README](roles/toolchain_apt/README.md).
+
+### Section-3 Docker daemon (docker)
+
+[`roles/docker`](roles/docker/) is the **section-3** ("base-image /
+daemon") toolchain mechanism - the counterpart to the section-1 host-push
+and section-2 apt patterns. A daemon is a rarely-versioned service, so it
+is installed at a coarser grain: Docker's own apt repo (GPG key in a
+dedicated keyring, `signed-by`-scoped so it authorises only Docker's
+source), the Docker CE engine package set, the `docker` systemd service
+enabled and started, and the runner service user added to the `docker`
+group so it reaches the socket without sudo. Group membership is the one
+var a consumer normally sets (`docker_group_members`); it is additive and,
+because the group is root-equivalent, deliberately opt-in rather than
+granted automatically. Provisioned by an Ansible role rather than
+base-image baking because this estate has no golden-image pipeline (see the
+role README for the rationale).
+
+The molecule scenario is genuine docker-in-docker - a privileged,
+systemd-init container so the inner daemon really starts and `verify` can
+run `docker ps`. Full var contract, the security note, and the
+docker-in-docker caveat are in the [role README](roles/docker/README.md).
 
 ## Tests and lint
 
