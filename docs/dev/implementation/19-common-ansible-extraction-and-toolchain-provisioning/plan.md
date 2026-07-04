@@ -672,7 +672,7 @@ targets cannot reach `api.adoptium.net` overrides the API base at a mirror.
 The role does **not** verify the tarball checksum at install: it pulls
 from the trusted substrate file server, and Adoptium byte-integrity is the
 concern of the acquisition/staging step that fetches the tarball from
-Adoptium and stages it on that file server ([Step 5.5](#step-55---toolchain-targeting-flow-in-a-consumer-repo)).
+Adoptium and stages it on that file server ([Step 5.5-A](#step-55-a---toolchain-targeting-flow-in-a-consumer-repo)).
 This is the same acquire/install split the PowerShell reconciler drew -
 `Invoke-JdkAcquisition` verified the hash, `Install-JdkVersion` only
 extracted. The resolver surfaces the checksum precisely so the staging
@@ -722,7 +722,7 @@ flowchart LR
   TOOLS -. removed before .-> SDK
 ```
 
-### Step 5.5 - Toolchain targeting flow in a consumer repo
+### Step 5.5-A - Toolchain targeting flow in a consumer repo
 
 Create the playbook + inventory wiring that targets production VMs with
 the toolchain roles. This lives in a consumer (Infrastructure-Vm-Provisioner
@@ -750,7 +750,8 @@ consumer flow needs the equivalent pin here.
   acquire/verify/stage step with the resolvers and downloads stubbed. The
   live end-to-end assertion - the flow run against a disposable VM with the
   toolchain present and on PATH - runs through Infrastructure-E2E on PR, not
-  as an in-repo suite, so live-Hyper-V coverage stays in the E2E repo.
+  as an in-repo suite (wired via the Step 5.5-B `ToolchainsFlow`
+  selector), so live-Hyper-V coverage stays in the E2E repo.
 - **README:** Document the toolchain targeting flow (playbook +
   inventory) and the acquire-verify-stage step in the consumer repo's
   README; this repo's README only references the reusable roles it
@@ -795,11 +796,135 @@ The split is the point of the contrast: the target flow moves upstream
 fetch + integrity into a deploying consumer and the install mechanics into
 reusable substrate roles, where the prior engine fused all three.
 
+### Step 5.5-A.5 - Make the E2E toolchain assertions engine-agnostic
+
+Prep for Step 5.5-B. The shared jdk / dotnet end-state assertions in
+Infrastructure-E2E currently hard-code the PowerShell reconciler's
+on-disk layout: the manifest store `/var/lib/infra-provisioner/manifests/`
+(filenames `javaDevKit-*.json` / `dotnetSdk-*.json` / the tool manifest
+shape) and the JDK install prefix `/opt/jdk-temurin-`. The Ansible
+`toolchain_host_push` engine writes a different store -
+`/var/lib/common-ansible/toolchains/manifests/` (`jdk-<v>.json`,
+`dotnet_sdk-<v>.json`, `dotnettool-<id>-<v>.json`) - and installs the JDK
+to `/opt/jdk-<v>` (no `temurin-` infix; the `.NET` SDK prefix `/opt/dotnet-`
+already matches across both engines). So the assertions cannot be reused
+verbatim across engines until the engine-specific paths are lifted into
+parameters.
+
+Parameterize each toolchain assertion helper - the jdk
+install / uninstall / version-change / noop set, the dotnet_sdk
+install / uninstall / version-change / noop set, and the dotnet_tools
+install / uninstall / version-change set - with the values that
+differ by engine: the manifest-store directory, the manifest filename
+prefix, and the JDK install prefix. The filename prefix is the leading
+segment of the manifest basename (`javaDevKit-` / `dotnetSdk-` /
+`dotnetTools-` for the reconciler; `jdk-` / `dotnet_sdk-` /
+`dotnettool-` for the Ansible engine): the jdk / dotnet_sdk helpers
+derive their `<prefix>*.json` listing glob from it, while the
+dotnet_tools helpers build the exact `<prefix><id>-<version>.json`
+basename they probe. A prefix (not a full glob) is the seam because
+the tool manifest name embeds the id and version, which a raw glob
+string could not express; the dotnet_tools install helper also takes
+the parent-SDK filename prefix, since its walker-contract check lists
+the SDK manifest to confirm the tool is referenced as a child. Every
+parameter defaults to the reconciler value, so all existing
+`custom-powershell` call sites in the phase files stay byte-for-byte
+identical and pass nothing new; Step 5.5-B's Ansible caller passes the
+`common-ansible` values. The observable end-state checks each helper
+already makes (present, on PATH, correct `-version`, install-dir swap
+on version-change, dir removed on uninstall) are untouched - only the
+store path and prefixes become inputs.
+
+This lands in Infrastructure-E2E, alongside the assertions it edits, and
+is cross-repo from this repo per the [Conventions](#conventions). It ships
+no behaviour change on its own: it is the seam Step 5.5-B needs to drive
+the same assertions through the Ansible engine.
+
+- **Reason:** Step 5.5-B's whole premise - the same jdk / dotnet
+  assertions stay green with `ToolchainsFlow` flipped to `ansible` - is
+  unattainable while the assertions probe the reconciler's manifest store
+  and JDK prefix by literal path. Lifting those into
+  reconciler-defaulted parameters is the prerequisite that makes the
+  reuse real, and isolating it here keeps the parity refactor reviewable
+  apart from the selector wiring.
+- **Tests:** Unit tests for the parameterized assertion helpers (they are
+  already dot-source-and-mock unit-testable in isolation) exercising both
+  paths: the reconciler defaults (no override -> the existing
+  `/var/lib/infra-provisioner` + `/opt/jdk-temurin-` expectations) and the
+  Ansible overrides (`/var/lib/common-ansible/toolchains/manifests/` +
+  `/opt/jdk-` -> the assertion probes the common-ansible store and prefix).
+  The existing phase-driven `custom-powershell` E2E run is unchanged
+  (defaults preserve every current call site).
+- **README:** Infrastructure-E2E's docs note that the toolchain assertions
+  are engine-parameterized (manifest store, filename prefix, JDK
+  install prefix) with reconciler defaults; this repo's (Common-Ansible)
+  README is unchanged.
+
+```mermaid
+flowchart LR
+  subgraph AH[E2E toolchain assertion helpers]
+    P[manifest-store dir + filename prefix + JDK prefix params]
+  end
+  DEF[reconciler defaults] --> P
+  P -->|no override| REC[(/var/lib/infra-provisioner + /opt/jdk-temurin-)]
+  P -->|5.5-B ansible caller override| ANS[(/var/lib/common-ansible + /opt/jdk-)]
+```
+
+### Step 5.5-B - Select the toolchain flow in E2E (ToolchainsFlow)
+
+Add a `ToolchainsFlow` selector to Infrastructure-E2E mirroring the
+existing `UsersFlow` / `RunnersFlow` engine switches
+(`agent/Invoke-E2EAgentLoop.ps1`): `custom-powershell` (default - the
+retained PowerShell reconciler, today's behaviour) or `ansible` (the
+Step 5.5-A flow), overridable from the menu payload alongside
+`usersFlow` / `runnersFlow`. The default of `custom-powershell` leaves
+every existing run unchanged. The selector gates only the install /
+uninstall *driver* - which engine puts the toolchain on the VM - while
+the existing jdk / dotnet end-state assertions (present, on PATH,
+version-swap swaps install dirs, uninstall removes) are reused verbatim
+across both engines. That reuse is what turns the Step 5.6 cutover into
+a measured result: the same assertions must stay green with
+`ToolchainsFlow` flipped to `ansible`.
+
+This lands in Infrastructure-E2E, not the consumer repo - mirroring
+Steps 3.4 / 4.3, which own the E2E re-point for the users and runners
+domains. Step 5.5-A ships the flow in the consumer; this step wires
+E2E to drive it. Cross-repo, per the [Conventions](#conventions).
+
+- **Reason:** Without a selector, E2E only ever exercises the
+  reconciler, so the Ansible flow's live-on-PR assertion (Step 5.5-A)
+  and the Step 5.6 parity criterion have no harness to run through.
+  Reusing the assertions across both engines is what makes "parity" a
+  measurement, not a claim.
+- **Tests:** E2E green on a disposable VM with `ToolchainsFlow=ansible`
+  resolving the Step 5.5-A flow - the jdk / dotnet install, version
+  swap, and uninstall assertions pass unchanged; `custom-powershell`
+  (default) reproduces today's reconciler run byte-for-byte; the menu
+  payload override selects the engine.
+- **README:** Infrastructure-E2E's README/docs document the
+  `ToolchainsFlow` selector and its menu-payload override alongside
+  `UsersFlow` / `RunnersFlow`; this repo's (Common-Ansible) README is
+  unchanged.
+
+```mermaid
+flowchart LR
+  subgraph VP[Infrastructure-Vm-Provisioner]
+    PS[PowerShell reconciler]
+    ANS[Ansible toolchain flow - 5.5-A]
+  end
+  E2E[E2E ToolchainsFlow] -->|custom-powershell| PS
+  E2E -->|ansible| ANS
+  PS --> ASSERT[shared jdk/dotnet assertions]
+  ANS --> ASSERT
+```
+
 ### Step 5.6 - Define the cutover criterion; keep the PS reconciler as a fork
 
 Record the explicit condition under which the PowerShell reconciler is
 retired (a later feature): the Ansible toolchain flow proven on a
-production runner with parity on install/swap/uninstall.
+production runner with parity on install/swap/uninstall. Parity is
+measured by the Step 5.5-B `ToolchainsFlow=ansible` E2E run passing the
+same install / swap / uninstall assertions the reconciler run passes.
 
 - **Reason:** Two engines coexist transiently; the retirement trigger must
   be written, not implied.
@@ -820,7 +945,7 @@ flowchart LR
 Reorganize Infrastructure-Vm-Provisioner's flat `hyper-v/ubuntu/` tree into
 the same self-contained per-impl slices the other consumers already carry
 (Step 4.1): `shared/`, `PowerShell/`, `Ansible/`. The `Ansible/` slice
-already exists (Step 5.5). Move the PowerShell reconciler - `common/`,
+already exists (Step 5.5-A). Move the PowerShell reconciler - `common/`,
 `up/`, `down/`, `provision.ps1`, `deprovision.ps1`, `ensure-vms-ready.ps1`,
 `start-vms.ps1`, `Install-ModuleDependencies.ps1` - into `PowerShell/`, and
 `setup-secrets.ps1` (the vault writer both impls read) into `shared/`.
@@ -833,10 +958,13 @@ outside the moved tree:
   `manual-dependencies.psd1`, `Get-ScenarioMenus.ps1`) that resolve this
   repo's entry scripts by path;
 - Infrastructure-E2E's resolution of `provision.ps1` / `deprovision.ps1`
-  (and the `setup-secrets.ps1` writer);
+  (and the `setup-secrets.ps1` writer); the E2E
+  `ToolchainsFlow=custom-powershell` path (Step 5.5-B) reuses this same
+  resolution, so it re-points with them - only reverification, not its
+  own seam fix;
 - every `Tests/` dot-source path - Tests mirrors production, so the Tests
   tree reorganizes in lockstep;
-- Step 5.5's `Stage-ToolchainArtifacts.ps1`, whose reuse-reach into the
+- Step 5.5-A's `Stage-ToolchainArtifacts.ps1`, whose reuse-reach into the
   reconciler resolvers (`..\..\up\jdk\Resolve-AdoptiumRelease.ps1`,
   `..\..\up\dotnet\Resolve-DotnetSdkRelease.ps1`) becomes
   `..\..\PowerShell\up\...`;
@@ -857,7 +985,7 @@ resolution needs no change.
 - **Tests:** Pure relocation, no behaviour change - coverage must not
   regress. The existing Pester suite is green after its dot-source paths are
   repointed; provision / deprovision / ensure-vms-ready / start-vms still
-  dispatch from `PowerShell/`; Step 5.5's toolchain Pester is green after its
+  dispatch from `PowerShell/`; Step 5.5-A's toolchain Pester is green after its
   `..\..\PowerShell\up\...` update; the `.menu` loads and resolves the moved
   entry scripts; Infrastructure-E2E resolves the moved `provision.ps1` /
   `deprovision.ps1`.
