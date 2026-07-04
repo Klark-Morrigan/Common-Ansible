@@ -805,11 +805,13 @@ on-disk layout: the manifest store `/var/lib/infra-provisioner/manifests/`
 shape) and the JDK install prefix `/opt/jdk-temurin-`. The Ansible
 `toolchain_host_push` engine writes a different store -
 `/var/lib/common-ansible/toolchains/manifests/` (`jdk-<v>.json`,
-`dotnet_sdk-<v>.json`, `dotnettool-<id>-<v>.json`) - and installs the JDK
+`dotnet-<v>.json`, `dotnettool-<id>-<v>.json`) - and installs the JDK
 to `/opt/jdk-<v>` (no `temurin-` infix; the `.NET` SDK prefix `/opt/dotnet-`
-already matches across both engines). So the assertions cannot be reused
-verbatim across engines until the engine-specific paths are lifted into
-parameters.
+already matches across both engines). It also uses a different manifest
+*content* schema (a `version` / `symlinks` shape with no `children`
+array). So the assertions cannot be reused verbatim across engines until
+the engine-specific paths - and the reconciler-only content checks - are
+lifted into parameters and a skip switch.
 
 Parameterize each toolchain assertion helper - the jdk
 install / uninstall / version-change / noop set, the dotnet_sdk
@@ -818,22 +820,30 @@ install / uninstall / version-change set - with the values that
 differ by engine: the manifest-store directory, the manifest filename
 prefix, and the JDK install prefix. The filename prefix is the leading
 segment of the manifest basename (`javaDevKit-` / `dotnetSdk-` /
-`dotnetTools-` for the reconciler; `jdk-` / `dotnet_sdk-` /
+`dotnetTools-` for the reconciler; `jdk-` / `dotnet-` /
 `dotnettool-` for the Ansible engine): the jdk / dotnet_sdk helpers
 derive their `<prefix>*.json` listing glob from it, while the
 dotnet_tools helpers build the exact `<prefix><id>-<version>.json`
 basename they probe. A prefix (not a full glob) is the seam because
 the tool manifest name embeds the id and version, which a raw glob
-string could not express; the dotnet_tools install helper also takes
-the parent-SDK filename prefix, since its walker-contract check lists
-the SDK manifest to confirm the tool is referenced as a child. Every
-parameter defaults to the reconciler value, so all existing
-`custom-powershell` call sites in the phase files stay byte-for-byte
-identical and pass nothing new; Step 5.5-B's Ansible caller passes the
-`common-ansible` values. The observable end-state checks each helper
-already makes (present, on PATH, correct `-version`, install-dir swap
-on version-change, dir removed on uninstall) are untouched - only the
-store path and prefixes become inputs.
+string could not express. Every parameter defaults to the reconciler
+value, so all existing `custom-powershell` call sites in the phase files
+stay byte-for-byte identical and pass nothing new; Step 5.5-B's Ansible
+caller passes the `common-ansible` values.
+
+Path parameters make the jdk / dotnet_sdk assertions (which read only
+manifest *presence*) fully engine-agnostic. The dotnet_tools install
+helper additionally reads manifest *content* the Ansible engine does not
+produce - its I4 field assertions (`rawVersion`, `ownedSymlinks`) and its
+I5 parent-SDK `children` walker link are the reconciler's truth-source
+schema - so that helper takes a `-SkipReconcilerManifestSchema` switch.
+The Ansible caller sets it to run only the engine-agnostic checks (store
+dir, symlink, apphost launch, tool-manifest presence); the reconciler
+default leaves the content + walker assertions in place. The observable
+end-state checks each helper already makes (present, on PATH, correct
+`-version`, install-dir swap on version-change, dir removed on uninstall)
+are untouched - only the store path, prefixes, and the tools content
+switch become inputs.
 
 This lands in Infrastructure-E2E, alongside the assertions it edits, and
 is cross-repo from this repo per the [Conventions](#conventions). It ships
@@ -852,9 +862,11 @@ the same assertions through the Ansible engine.
   paths: the reconciler defaults (no override -> the existing
   `/var/lib/infra-provisioner` + `/opt/jdk-temurin-` expectations) and the
   Ansible overrides (`/var/lib/common-ansible/toolchains/manifests/` +
-  `/opt/jdk-` -> the assertion probes the common-ansible store and prefix).
-  The existing phase-driven `custom-powershell` E2E run is unchanged
-  (defaults preserve every current call site).
+  `/opt/jdk-` -> the assertion probes the common-ansible store and prefix),
+  plus the dotnet_tools install helper's `-SkipReconcilerManifestSchema`
+  path (asserts tool-manifest presence and issues no parent-SDK walker
+  probe). The existing phase-driven `custom-powershell` E2E run is
+  unchanged (defaults preserve every current call site).
 - **README:** Infrastructure-E2E's docs note that the toolchain assertions
   are engine-parameterized (manifest store, filename prefix, JDK
   install prefix) with reconciler defaults; this repo's (Common-Ansible)
