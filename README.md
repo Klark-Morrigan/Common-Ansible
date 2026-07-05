@@ -14,6 +14,7 @@ was extended by the feature step that earned it.
 ## Index
 
 - [Controller bootstrap](#controller-bootstrap)
+  - [Consumer controller bootstrap](#consumer-controller-bootstrap)
   - [Troubleshooting: WSL default distro has no bash](#troubleshooting-wsl-default-distro-has-no-bash)
   - [Troubleshooting: capturing logs and re-running an interrupted bootstrap](#troubleshooting-capturing-logs-and-re-running-an-interrupted-bootstrap)
 - [Bridge contract](#bridge-contract)
@@ -58,6 +59,19 @@ stage installs the missing package via `sudo apt-get`; the existing
 `sudo apt-get install -y <pkg>` hint stays as the fallback path for
 when the install itself cannot proceed (no `sudo`, `apt-get` missing,
 offline, apt lock).
+
+### Consumer controller bootstrap
+
+Substrate consumers (Vm-Provisioner, Vm-Users, GitHubRunners) do not repeat
+this logic. Each ships a ~4-line `ops/bootstrap-controller.sh` shim that
+resolves this sibling and execs the shared
+[`ops/bootstrap-controller-consumer.sh`](ops/bootstrap-controller-consumer.sh),
+the single source of truth for the consumer side. It reuses the controller venv
+that `bootstrap-controller.ps1` (above) builds, delegating to that bootstrap
+only when the venv is absent, and then reports how the consumer's roles resolve
+on `ANSIBLE_ROLES_PATH` (a consumer's own `roles/` ahead of the substrate's, or
+substrate-only when it ships none). It takes the consumer's Ansible-slice root
+as its one argument.
 
 The `sudo` call **prompts for the WSL user's password once per fresh
 bootstrap** (the very first user you set when WSL provisioned the
