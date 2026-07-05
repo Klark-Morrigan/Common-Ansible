@@ -284,10 +284,11 @@ compose, the orchestrator itself) stay at the `ops/` root:
   when set, the bridge delegates to `_stage-host-fileserver.sh` and
   (via the EXIT trap) stops the listener it backgrounded on every exit
   path; when unset, neither the listener nor the stop call run, and the
-  file-server-pair extra-vars keys are genuinely absent. Every flow that
-  stages the file server also declares a token (its downstream play
-  consumes one), so `CA_NEEDS_HOST_FILE_SERVER=1` requires
-  `CA_REQUIRES_TOKEN=1` and is rejected fast otherwise. `GH_TOKEN` is
+  file-server-pair extra-vars keys are genuinely absent. The host file
+  server and the GitHub token are independent opt-ins: a flow can serve
+  artifacts consumers pull by name (e.g. toolchain tarballs) with
+  `CA_NEEDS_HOST_FILE_SERVER=1` and no token, and another can require a
+  token with no file server. `GH_TOKEN` is
   lifted to a local when the contract
   requires a token and then cleared from the bridge environment
   unconditionally before `ansible-playbook` runs; the downstream play
@@ -337,14 +338,17 @@ compose, the orchestrator itself) stay at the `ops/` root:
 
 External contract (consumed by feature playbooks): the extra-vars
 document always has the top-level key `vm_provisioner_config` (the
-shared inventory). Every other key is contributed by whichever
-per-domain helper a declared vault dispatched to, and is present only
-when the contract declared that vault (`CA_EXTRA_VAULTS`). The optional
-cross-cutting inputs the bridge forwards - the GitHub token (with
-`CA_REQUIRES_TOKEN=1`) and the host file server URL + artifact version
-(with `CA_NEEDS_HOST_FILE_SERVER=1`, register flow only) - reach the
-helper that consumes them and surface as that helper's keys. The
-inventory has one group `vm_provisioner_hosts` keyed by `vmName`.
+shared inventory). Most other keys are contributed by whichever
+per-domain helper a declared vault dispatched to, and are present only
+when the contract declared that vault (`CA_EXTRA_VAULTS`). One
+cross-cutting key is the exception: with `CA_NEEDS_HOST_FILE_SERVER=1`
+the bridge emits `host_file_server_base_url` from the always-on
+inventory fragment, so the URL reaches the roles whether or not any
+extra vault is declared (the file server is a property of the run, not
+of a vault). The GitHub token (with `CA_REQUIRES_TOKEN=1`) still reaches
+only the declared vault helper that consumes it and surfaces as that
+helper's key. The inventory has one group `vm_provisioner_hosts` keyed
+by `vmName`.
 
 ### The toolchains taxonomy block (vm_provisioner_config.toolchains)
 

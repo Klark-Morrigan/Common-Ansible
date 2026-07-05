@@ -452,22 +452,26 @@ STUB
     [[ "${trace}" != *"stop-host-file-server"* ]]
 }
 
-@test "CA_NEEDS_HOST_FILE_SERVER=1 without a token fails fast" {
-    # Every flow that opts into the host file server also declares a token
-    # (its downstream play consumes one). The bridge ties the two flags
-    # together and rejects a file-server opt-in without a token before any
-    # vault read or listener stand-up.
+@test "CA_NEEDS_HOST_FILE_SERVER=1 without a token serves and runs (independent opt-ins)" {
+    # The host file server and the GitHub token are independent opt-ins. A
+    # flow that serves artifacts consumers pull by name (e.g. toolchain
+    # tarballs) needs the file server but no token. The bridge must stage and
+    # run rather than reject the pairing.
     export CA_NEEDS_HOST_FILE_SERVER=1
     unset CA_REQUIRES_TOKEN
     unset GH_TOKEN
+    export CA_HOST_FILE_SERVER_DIR='C:\Users\Test\runner-cache'
+    export CA_HOST_FILE_SERVER_VERSION="3.1.4"
 
     run "${BASH_BIN}" "${TEST_REPO}/ops/_run-playbook.sh" playbooks/_noop.yml
-    [ "${status}" -ne 0 ]
-    [[ "${output}" == *"CA_NEEDS_HOST_FILE_SERVER"* ]]
-    [[ "${output}" == *"CA_REQUIRES_TOKEN"* ]]
+    [ "${status}" -eq 0 ]
 
     trace="$(cat "${TRACE_FILE}")"
-    [[ "${trace}" != *"read-vault-config"* ]]
+    [[ "${trace}" == *"stage-host-fileserver:"* ]]
+
+    # No token was set, and none is forwarded to the serve-only helper.
+    stage_line="$(grep '^stage-host-fileserver:' "${TRACE_FILE}")"
+    [[ "${stage_line}" != *"--github-token"* ]]
 }
 
 @test "CA_REQUIRES_TOKEN=1 without GH_TOKEN fails fast with a clear message" {

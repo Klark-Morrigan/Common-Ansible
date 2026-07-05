@@ -57,6 +57,33 @@ teardown() {
     [ "$(printf '%s' "${output}" | jq -r '.vm_provisioner_config[0].ipAddress')" = "10.0.0.1" ]
 }
 
+@test "adds host_file_server_base_url as a second key when the file-server pair is given" {
+    # The always-on inventory fragment carries the file-server URL so a flow
+    # can stage the file server without declaring an extra vault. The runner
+    # version is consumed and discarded (only the base URL is emitted).
+    printf '%s' '[{"vmName":"a","ipAddress":"10.0.0.1"}]' > "${PROV}"
+    run "${BASH_BIN}" "${SCRIPT}" --provisioner-config "${PROV}" \
+        --host-base-url "http://10.10.0.1:8745" --runner-version "2.999.0"
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s' "${output}" | jq -r 'keys | sort | join(",")')" = "host_file_server_base_url,vm_provisioner_config" ]
+    [ "$(printf '%s' "${output}" | jq -r '.host_file_server_base_url')" = "http://10.10.0.1:8745" ]
+    [ "$(printf '%s' "${output}" | jq -r '.vm_provisioner_config[0].vmName')" = "a" ]
+}
+
+@test "omits host_file_server_base_url when no base url is given" {
+    printf '%s' '[{"vmName":"a","ipAddress":"10.0.0.1"}]' > "${PROV}"
+    run "${BASH_BIN}" "${SCRIPT}" --provisioner-config "${PROV}"
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s' "${output}" | jq -r 'has("host_file_server_base_url")')" = "false" ]
+}
+
+@test "rejects an empty --host-base-url value" {
+    printf '%s' '[{"vmName":"a","ipAddress":"10.0.0.1"}]' > "${PROV}"
+    run "${BASH_BIN}" "${SCRIPT}" --provisioner-config "${PROV}" --host-base-url ""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"--host-base-url requires a non-empty value"* ]]
+}
+
 @test "a well-formed toolchains block rides through untouched" {
     printf '%s' '[{"vmName":"a","toolchains":{"vmDownloaded":[{"name":"shellcheck"}]}}]' > "${PROV}"
     run "${BASH_BIN}" "${SCRIPT}" --provisioner-config "${PROV}"

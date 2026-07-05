@@ -217,15 +217,12 @@ fi
 # tripping set -e.
 read -r -a extra_vaults <<<"${extra_vaults_line#EXTRA_VAULTS=}" || true
 
-# Tie the host-file-server opt-in to the token requirement: every flow that
-# stages the file server also declares a token (its downstream play consumes
-# one), so a file-server opt-in without CA_REQUIRES_TOKEN=1 is a
-# misconfiguration. Reject it here, before the tmpdir and the listener are
-# stood up, rather than deeper in the run.
-if [[ "${needs_host_file_server}" == "1" && "${requires_token}" != "1" ]]; then
-    log_err "the host file server (CA_NEEDS_HOST_FILE_SERVER=1) requires a token (CA_REQUIRES_TOKEN=1)"
-    exit 2
-fi
+# The host file server and the GitHub token are independent opt-ins. Some
+# flows stage the file server to serve artifacts a downstream play pulls by
+# name (no token needed - e.g. toolchain tarballs); others need a token but no
+# file server. Each is governed on its own: CA_REQUIRES_TOKEN=1 still demands a
+# non-empty GH_TOKEN (checked in the contract parser), and the file server is
+# stood up whenever CA_NEEDS_HOST_FILE_SERVER=1. Do not couple the two here.
 
 # ---------------------------------------------------------------------------
 # 2. Per-invocation tmpdir. mktemp -d under $TMPDIR (tmpfs on most
