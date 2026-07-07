@@ -12,7 +12,7 @@ PowerShell reconciler's `DotnetToolsProvider`
 
 - [Var contract](#var-contract)
 - [Relationship to the SDK role](#relationship-to-the-sdk-role)
-- [Parent/child teardown ordering](#parentchild-teardown-ordering)
+- [Parent/child ordering](#parentchild-ordering)
 - [How it installs a tool](#how-it-installs-a-tool)
 - [How it uninstalls a tool](#how-it-uninstalls-a-tool)
 - [Consuming this role](#consuming-this-role)
@@ -61,30 +61,35 @@ The two roles are otherwise decoupled: the SDK owns
 `/usr/local/bin` shim symlinks. There is deliberately **no** meta dependency
 between them - the consumer play composes the pair (see below).
 
-## Parent/child teardown ordering
+## Parent/child ordering
 
-Every `dotnet tool` operation - install **and uninstall** - needs the
-`dotnet` driver on `PATH`, which `dotnet_sdk` provides via
-`/usr/local/bin/dotnet`. So a consumer play must:
+**Install** needs the `dotnet` driver on `PATH`, which `dotnet_sdk` provides
+via `/usr/local/bin/dotnet`. So a consumer play must run `dotnet_sdk` (or
+ensure the SDK is present) **before** `dotnet_tools`, so the driver exists
+when a tool installs.
 
-- **install/steady state:** run `dotnet_sdk` (or ensure the SDK is present)
-  **before** `dotnet_tools`, so the driver exists when a tool installs;
-- **teardown:** run `dotnet_tools` **before** `dotnet_sdk`, so the driver is
-  still present when the tools uninstall. Remove the SDK first and
-  `dotnet tool uninstall` cannot run - the tool's `.store` slot would leak.
+**Teardown is order-independent.** The uninstall path is self-sufficient from
+the manifest ([`tasks/_uninstall-tool.yml`](tasks/_uninstall-tool.yml)):
+after a best-effort `dotnet tool uninstall` (the preferred clean path when the
+driver is present), it removes the recorded command shims and the tool's
+`.store` slot directly. So removing `dotnet_sdk` **before** `dotnet_tools` -
+which a single install-ordered reconcile playbook does when driving every
+toolchain to absent - no longer leaks the tool's `.store` slot the way it
+would if uninstall depended on the now-absent driver.
 
-This role-order contract is the Ansible expression of the parent/child
-teardown ordering the PowerShell reconciler's children-walker guaranteed
-(tools are removed before the SDK). The consumer flow (plan step 5.5) owns
-placing the roles in this order.
+Making uninstall driver-independent achieves the same no-leak outcome the
+PowerShell reconciler's children-walker guaranteed with a tools-before-SDK
+order, **without** imposing a teardown role order on the consumer. (Install
+order still matters, and the install/steady-state order below is unchanged.)
 
 ```mermaid
 flowchart LR
   subgraph install [install / steady state]
     S1[dotnet_sdk] --> T1[dotnet_tools]
   end
-  subgraph teardown
-    T2[dotnet_tools] -. removed before .-> S2[dotnet_sdk]
+  subgraph teardown [teardown - any order]
+    T2[dotnet_tools] -.-> S2[dotnet_sdk]
+    S2 -.-> T2
   end
 ```
 
@@ -117,11 +122,17 @@ install and driven by the manifest:
 
 1. Remove the recorded `/usr/local/bin` shim symlinks (exactly the recorded
    paths - never a glob).
-2. `dotnet tool uninstall <id> --tool-path <root>` to free the `.store`
-   slot. Non-zero is logged, not fatal (a stale slot must not block manifest
-   removal). The role never `rm`s `.store/` itself - the driver owns that
-   slot.
-3. Remove the manifest **last** (recovery anchor).
+2. `dotnet tool uninstall <id> --tool-path <root>` - the driver's own clean
+   removal, best-effort when the driver is present. Non-zero is logged, not
+   fatal (an absent driver or already-freed slot must not block removal).
+3. Guaranteed manifest-driven removal that backstops the driver so the store
+   is freed even when the driver is gone: the recorded command shim binaries
+   under `<root>`, then the tool's `.store/<id>` slot. A direct `rm` of that
+   slot is safe because a `--tool-path` holds exactly one version per id
+   (the driver rejects a second), so `.store/<id>` maps 1:1 to this install -
+   not a cross-version glob. (This differs from the `--global` manifest store,
+   which the driver alone owns.)
+4. Remove the manifest **last** (recovery anchor).
 
 ## Consuming this role
 
@@ -150,8 +161,9 @@ install and driven by the manifest:
 `host_file_server_base_url` must be supplied by the bridge, and each tool's
 `.nupkg` must be staged on that file server as
 `dotnet-tool-<id>-<version>.nupkg` (the acquisition/staging step, plan 5.5).
-On teardown, list `dotnet_tools` (with an empty desired set) **before**
-`dotnet_sdk` - see [Parent/child teardown ordering](#parentchild-teardown-ordering).
+Teardown role order does not matter - the uninstall frees the `.store` slot
+even if `dotnet_sdk` was removed first; see
+[Parent/child ordering](#parentchild-ordering).
 
 ## Tests
 
@@ -165,22 +177,26 @@ exactly as production) served together with fake `.nupkg` packages from one
   `molecule idempotence`. Verifies the `.store` slot, the `/usr/local/bin`
   shim symlink, the manifest (id, version, key, symlinks, commands), and
   that the symlinked command runs.
-- **remove** - install the SDK and a tool, then converge `dotnet_tools`
-  (empty desired set) **before** `dotnet_sdk` (empty desired set). Verifies
-  the tool is fully removed (shim, `.store` slot, manifest) **and** the SDK
-  is removed - proving the tool was torn down while the driver was still
-  present. A reversed order would leak the `.store` slot, which the verify
-  would catch.
+- **remove** - install the SDK and a tool, then converge `dotnet_sdk` (empty
+  desired set) **before** `dotnet_tools` (empty desired set) - i.e. the SDK
+  driver is torn down *first*, the order an install-ordered reconcile playbook
+  uses and the one that used to leak. Verifies the tool is fully removed (shim
+  symlink, tool-path shim binary, `.store/<id>` slot, manifest) **and** the
+  SDK is removed - proving the manifest-driven uninstall frees the store
+  without the driver. This is the regression guard for the driver-independent
+  teardown.
 
 ## Parity with the PowerShell reconciler
 
 The composite `<id>@<version>` diff identity, the offline `--configfile`
-install from a pinned local source, the driver-owned `.store` slot freed by
-`dotnet tool uninstall` (never a direct `rm`), the per-command
-`/usr/local/bin` shim symlinks recorded for glob-free removal, and the
-manifest-last ordering all mirror `DotnetToolsProvider`. The parent/child
-teardown ordering the PowerShell children-walker enforced at reconcile time
-is expressed here as the consumer play's role order (tools before the SDK on
-teardown). The `.nupkg` acquisition + checksum verification is the
-consumer/staging step's concern (plan 5.5), not this role's - the same
-acquire/install split the reconciler drew.
+install from a pinned local source, the per-command `/usr/local/bin` shim
+symlinks recorded for glob-free removal, and the manifest-last ordering all
+mirror `DotnetToolsProvider`. Where this role **diverges** for robustness: the
+PowerShell children-walker enforced a tools-before-SDK teardown so
+`dotnet tool uninstall` always had a driver; here the uninstall instead frees
+the `.store/<id>` slot directly from the manifest (driver-preferred, direct-rm
+backstop), so a single install-ordered reconcile play tears every toolchain
+down without a leak and the consumer owes no teardown role order. The `.nupkg`
+acquisition + checksum verification is the consumer/staging step's concern
+(plan 5.5), not this role's - the same acquire/install split the reconciler
+drew.

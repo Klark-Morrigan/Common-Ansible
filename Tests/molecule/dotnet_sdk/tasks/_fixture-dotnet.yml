@@ -95,7 +95,13 @@
       sdks:
         - version: "{{ item.version }}"
           files:
-            - name: "{{ item.archive }}"
+            # Mirror Microsoft's real feed quirk: files[].name is the
+            # version-LESS 'dotnet-sdk-linux-x64.tar.gz', while only the url
+            # leaf carries the version. The resolver must pull by the url leaf
+            # (item.archive - the name the tarball is staged under above), not
+            # by name; hardcoding a version-less name here is what makes this
+            # scenario fail if the resolver ever reads name instead.
+            - name: dotnet-sdk-linux-x64.tar.gz
               rid: linux-x64
               url: "http://127.0.0.1:{{ fixture_port }}/{{ item.archive }}"
               hash: "fixture-sha512-{{ item.version }}"

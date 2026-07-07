@@ -14,15 +14,18 @@
 # mirrors rather than delegates (the install/uninstall mechanics differ
 # entirely).
 #
-# Parent/child ordering. Every `dotnet tool` operation - install AND
-# uninstall - needs the `dotnet` driver on PATH, which the dotnet_sdk role
-# provides via /usr/local/bin/dotnet. A consumer play must therefore run
-# dotnet_tools with the SDK already present, and on teardown must run
-# dotnet_tools BEFORE dotnet_sdk so the driver is still there when the tools
-# uninstall. This is the Ansible expression of the parent/child teardown
-# ordering the PowerShell reconciler's children-walker guaranteed - here it
-# is play role-order, documented in the role README and owned by the
-# consumer flow (plan step 5.5).
+# Parent/child ordering. INSTALL needs the `dotnet` driver on PATH (the
+# dotnet_sdk role provides it via /usr/local/bin/dotnet), so a consumer play
+# must run dotnet_tools with the SDK already present. TEARDOWN, by contrast,
+# is order-independent: the uninstall path is self-sufficient from the
+# manifest (tasks/_uninstall-tool.yml removes the recorded shims and the
+# .store slot directly, using the driver's own `dotnet tool uninstall` only as
+# a preferred clean path when present). So a single install-ordered reconcile
+# playbook that drives every toolchain to absent no longer leaks a tool's
+# .store slot when dotnet_sdk is removed before this role. The mechanism this
+# ports (the PowerShell reconciler's children-walker) guaranteed tools-before-
+# SDK at reconcile time; making uninstall driver-independent achieves the same
+# no-leak outcome without imposing a teardown role order on the consumer.
 #
 # Required input: none. With the defaults below and an empty
 # dotnet_tools_tools the role is a no-op that uninstalls any global tool it
