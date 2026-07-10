@@ -119,6 +119,16 @@ export ANSIBLE_SSH_ARGS="-C -o ControlMaster=auto -o ControlPersist=60s -o UserK
 # fails every attempt). Only connection setup is retried, not tasks.
 export ANSIBLE_SSH_RETRIES=3
 
+# Mirrors `pipelining = True` from ../ansible.cfg [ssh_connection]. Runs each
+# module over the persistent SSH connection instead of the default sftp-temp-
+# file + exec + cleanup three-round-trip dance. Each round trip is costly over
+# the two-hop proxy (host portproxy -> router -W-> guest), and the toolchain
+# roles are loop-heavy (the JDK bin/ symlink loop is ~40 per-item tasks, ~80s of
+# round-trip overhead per run), so collapsing three trips into one roughly halves
+# it. Safe here: Ubuntu cloud images do not set sudoers `requiretty`, the one
+# condition that breaks pipelining with become.
+export ANSIBLE_PIPELINING=True
+
 # Callback plugin search path (mirrors `callback_plugins` in ../ansible.cfg).
 # Holds timing_tree - the aggregate callback that records each task's duration
 # and writes the per-task rows the bash timing emitter (Common-Automation
