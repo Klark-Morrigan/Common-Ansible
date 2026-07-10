@@ -16,14 +16,31 @@
 # (the running process keeps its already-open file). Draining is a
 # Windows file-lock concern the port does not inherit.
 
+# Batched into one shell round trip instead of a per-file `file:
+# state=absent` loop - the manifest for a bin-subdir tool records dozens
+# of links and each removal was a module round trip. Still removes exactly
+# the recorded paths (never a glob - the record model's core invariant).
+# `-e || -L` catches a broken link too (a dangling target), and the
+# removed flag drives `changed_when` so a crash-recovery replay over an
+# already-torn-down set honestly reports no change.
 - name: Remove the recorded /usr/local/bin symlinks
-  ansible.builtin.file:
-    path: "{{ item.path }}"
-    state: absent
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      removed=0
+      for path in {{ toolchain_host_push_stale_entry.symlinks
+                     | default([]) | map(attribute='path')
+                     | map('quote') | join(' ') }}; do
+        if [ -e "$path" ] || [ -L "$path" ]; then
+          rm -f "$path"
+          removed=1
+        fi
+      done
+      echo "changed=${removed}"
   become: true
-  loop: "{{ toolchain_host_push_stale_entry.symlinks | default([]) }}"
-  loop_control:
-    label: "{{ item.path }}"
+  register: toolchain_host_push_symlink_removal
+  changed_when: "'changed=1' in toolchain_host_push_symlink_removal.stdout"
+  when: toolchain_host_push_stale_entry.symlinks | default([]) | length > 0
 
 - name: Remove the /etc/profile.d script if this version owned it
   ansible.builtin.file:
