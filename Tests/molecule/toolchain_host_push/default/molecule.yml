@@ -3,7 +3,7 @@
 # default sequence's `idempotence` phase.
 #
 # Single Ubuntu 24.04 container, Docker driver, ansible verifier. The role
-# only manipulates the filesystem (get_url, unarchive, file, copy), so a
+# only manipulates the filesystem (get_url, tar extract, file, copy), so a
 # non-systemd sleep-infinity container suffices. The fixture http server
 # runs INSIDE the container (prepare.yml) bound to 127.0.0.1, so no
 # host-side listener is involved.
