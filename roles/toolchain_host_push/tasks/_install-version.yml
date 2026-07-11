@@ -160,13 +160,17 @@
 # skipped on a no-op re-run, not by this task.
 - name: Create the /usr/local/bin symlinks for the bin-subdir files
   ansible.builtin.shell:
+    # pipefail + bash satisfy ansible-lint's risky-shell-pipe rule, which
+    # flags the `|` in the Jinja filter chain below even though the shell
+    # body itself pipes nothing.
     cmd: |
-      set -eu
+      set -euo pipefail
       for src in {{ toolchain_host_push_bin_files.files
                     | default([]) | map(attribute='path')
                     | map('quote') | join(' ') }}; do
         ln -sfn "$src" "/usr/local/bin/$(basename "$src")"
       done
+    executable: /bin/bash
   become: true
   changed_when: true
   when: toolchain_host_push_bin_files.files | default([]) | length > 0

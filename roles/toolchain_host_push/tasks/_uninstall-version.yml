@@ -25,8 +25,11 @@
 # already-torn-down set honestly reports no change.
 - name: Remove the recorded /usr/local/bin symlinks
   ansible.builtin.shell:
+    # pipefail + bash satisfy ansible-lint's risky-shell-pipe rule, which
+    # flags the `|` in the Jinja filter chain below even though the shell
+    # body itself pipes nothing.
     cmd: |
-      set -eu
+      set -euo pipefail
       removed=0
       for path in {{ toolchain_host_push_stale_entry.symlinks
                      | default([]) | map(attribute='path')
@@ -37,6 +40,7 @@
         fi
       done
       echo "changed=${removed}"
+    executable: /bin/bash
   become: true
   register: toolchain_host_push_symlink_removal
   changed_when: "'changed=1' in toolchain_host_push_symlink_removal.stdout"
