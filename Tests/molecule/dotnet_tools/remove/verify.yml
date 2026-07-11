@@ -1,10 +1,11 @@
 ---
 # Verify the post-remove state: the tool AND the SDK are both fully gone.
-# That the tool's .store slot, shim symlink, and manifest are all removed
-# proves `dotnet tool uninstall` ran while the SDK driver was still present -
-# i.e. the tool was torn down BEFORE the SDK (the parent/child ordering). A
-# reversed order would have left the .store slot behind (no driver to free
-# it), failing the tool-store assertion below.
+# The converge removed the SDK FIRST (driver gone), then the tools - the
+# order that used to leak. That the tool's .store slot (both the id-level dir
+# and the version dir under it), its tool-path shim binary, its /usr/local/bin
+# shim symlink, and its manifest are ALL removed proves the manifest-driven
+# uninstall freed the store WITHOUT the driver. The id-level .store/<id> check
+# is the exact leak the E2E caught before the fix.
 
 - name: Verify - teardown-order removal post-conditions
   hosts: all
@@ -23,21 +24,23 @@
         path: "{{ item }}"
       register: tool_artifacts
       loop:
+        - "{{ tools_root }}/.store/{{ tool_id }}"
         - "{{ tools_root }}/.store/{{ tool_id }}/{{ tool_version }}"
+        - "{{ tools_root }}/{{ command_name }}"
         - "/usr/local/bin/{{ command_name }}"
         - "{{ tool_manifest }}"
       loop_control:
         label: "{{ item }}"
 
-    - name: Assert every tool artifact was removed (tool torn down first)
+    - name: Assert every tool artifact was removed (driver-independent uninstall)
       ansible.builtin.assert:
         that:
           - >-
             (tool_artifacts.results | map(attribute='stat.exists') | list)
-            == [false, false, false]
+            == [false, false, false, false, false]
         fail_msg: >-
-          One or more tool artifacts survived removal (a reversed teardown
-          order leaves the .store slot):
+          One or more tool artifacts survived removal (the manifest-driven
+          uninstall must free the .store slot even with the driver gone):
           {{
             dict(
               tool_artifacts.results | map(attribute='item')

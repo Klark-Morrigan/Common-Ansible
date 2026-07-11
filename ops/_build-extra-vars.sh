@@ -168,10 +168,12 @@ if [[ "${fileserver_pair_set}" -eq 1 ]]; then
     log_err "--host-base-url and --runner-version must be supplied together"
     exit 2
 fi
-if [[ "${fileserver_pair_set}" -eq 2 && "${extras_declared}" -ne 1 ]]; then
-    log_err "--host-base-url / --runner-version require at least one declared extra vault"
-    exit 2
-fi
+# No "requires an extra vault" gate on the file-server pair: the always-on
+# inventory fragment consumes the URL (emitting host_file_server_base_url), so
+# a flow can stage the file server without declaring any extra vault - e.g. a
+# toolchain flow whose desired-state lives in the inventory vault itself.
+# Vault helpers still receive the pair too (see the dispatch loop below), so
+# consumers that consume it there are unaffected.
 
 # ---------------------------------------------------------------------------
 # 3. Dispatch. The inventory fragment is always emitted; each declared
@@ -191,8 +193,18 @@ if [[ -n "${consumer_root}" ]]; then
 fi
 
 fragments=()
+# The always-on inventory fragment also carries the file-server URL when the
+# bridge supplied one, so it reaches the roles even with no extra vault
+# declared. Build its args, appending the file-server pair only when present.
+inventory_args=( --provisioner-config "${provisioner_path}" )
+if [[ "${fileserver_pair_set}" -eq 2 ]]; then
+    inventory_args+=(
+        --host-base-url  "${host_base_url}"
+        --runner-version "${runner_version}"
+    )
+fi
 fragments+=( "$("${script_dir}/virtual-machines/_build-extra-vars-inventory.sh" \
-                --provisioner-config "${provisioner_path}")" )
+                "${inventory_args[@]}")" )
 
 if [[ "${#vault_paths[@]}" -gt 0 ]]; then
     for vault_name in "${!vault_paths[@]}"; do

@@ -220,16 +220,18 @@ EOF
     [[ "${output}" == *"--host-base-url and --runner-version"* ]]
 }
 
-@test "file-server pair with no declared extra vault is rejected" {
-    # The file-server URL has no consumer without a declared vault to
-    # forward it to. Reject so a misconfigured caller does not produce
-    # extra-vars carrying an unreachable URL.
+@test "file-server pair with no declared extra vault emits the URL via the inventory fragment" {
+    # The file-server URL is a property of the file server, not of any vault.
+    # The always-on inventory fragment carries it, so a flow can stage the
+    # file server without declaring an extra vault - e.g. a toolchain flow
+    # whose desired-state lives in the inventory vault itself.
     run "${BASH_BIN}" "${SCRIPT}" \
         --provisioner-config "${PROV}" \
         --host-base-url "http://10.10.0.1:8745" \
         --runner-version "2.999.0"
-    [ "${status}" -eq 2 ]
-    [[ "${output}" == *"require at least one declared extra vault"* ]]
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s' "${output}" | jq -r 'keys | sort | join(",")')" = "host_file_server_base_url,vm_provisioner_config" ]
+    [ "$(printf '%s' "${output}" | jq -r '.host_file_server_base_url')" = "http://10.10.0.1:8745" ]
 }
 
 @test "helper failures surface to the composer's exit code" {

@@ -1,25 +1,27 @@
 ---
-# Converge - desire the empty set for BOTH toolchains, in teardown order:
-# dotnet_tools FIRST (so `dotnet tool uninstall` runs while the driver is
-# still present), then dotnet_sdk (which removes the driver). This is the
-# consumer-play expression of the parent/child teardown ordering: tools are
-# removed before the SDK. Reversing these two tasks would break the tool
-# uninstall (no driver) and leak its .store slot - which the verify catches.
+# Converge - desire the empty set for BOTH toolchains, in the INSTALL order a
+# single reconcile playbook uses: dotnet_sdk FIRST (which removes the driver),
+# then dotnet_tools. This is the order that used to leak the tool's .store
+# slot (the tools uninstall ran `dotnet tool uninstall` after the driver was
+# gone). The uninstall is now driver-independent - it frees the slot from the
+# manifest - so this reversed order must leave the store clean, which the
+# verify asserts. Deliberately the previously-broken order: it is the
+# regression guard for the driver-independent teardown.
 
-- name: Converge - remove the tool, then the SDK (teardown order)
+- name: Converge - remove the SDK first, then the tools (install order)
   hosts: all
   gather_facts: false
   vars:
     host_file_server_base_url: http://127.0.0.1:18842
   tasks:
-    - name: Remove all global tools (empty desired set) - BEFORE the SDK
-      ansible.builtin.include_role:
-        name: dotnet_tools
-      vars:
-        dotnet_tools_tools: []
-
-    - name: Remove all .NET SDKs (empty desired set) - AFTER the tools
+    - name: Remove all .NET SDKs (empty desired set) - BEFORE the tools
       ansible.builtin.include_role:
         name: dotnet_sdk
       vars:
         dotnet_sdk_versions: []
+
+    - name: Remove all global tools (empty desired set) - AFTER the SDK
+      ansible.builtin.include_role:
+        name: dotnet_tools
+      vars:
+        dotnet_tools_tools: []

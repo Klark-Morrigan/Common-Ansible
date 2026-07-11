@@ -1,0 +1,44 @@
+---
+# Prepare the docker scenario:
+#   1. Assert the absent baseline (no docker on PATH yet) so the converge's
+#      install is proven to be what put it there, not the base image.
+#   2. Seed a test runner user that already belongs to a marker group, so
+#      verify can prove the role's group step ADDED docker via append -
+#      without stripping the user's existing groups.
+
+- name: Prepare - absent baseline and a seeded runner user
+  hosts: all
+  gather_facts: false
+  vars:
+    test_runner_user: cirunner
+    test_marker_group: probe
+  tasks:
+    - name: Look for a docker on PATH
+      ansible.builtin.command: which docker
+      register: prepare_docker_which
+      changed_when: false
+      failed_when: false
+
+    - name: Assert docker is not yet installed
+      ansible.builtin.assert:
+        that:
+          - prepare_docker_which.rc != 0
+        fail_msg: >-
+          docker is already on PATH before converge
+          ({{ prepare_docker_which.stdout }}); the absent baseline this
+          scenario relies on no longer holds.
+
+    # A pre-existing group the runner belongs to. verify asserts the user
+    # still has it after the role's append, catching a regression that
+    # replaced (rather than appended) the user's groups.
+    - name: Create the marker group
+      ansible.builtin.group:
+        name: "{{ test_marker_group }}"
+        state: present
+
+    - name: Create the test runner user in the marker group
+      ansible.builtin.user:
+        name: "{{ test_runner_user }}"
+        groups: "{{ test_marker_group }}"
+        append: true
+        create_home: true

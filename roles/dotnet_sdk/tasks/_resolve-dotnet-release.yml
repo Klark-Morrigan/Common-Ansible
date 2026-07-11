@@ -137,9 +137,15 @@
       .tar.gz file in releases.json.
 
 # Record the resolved release. `archive` is the tarball basename the file
-# server serves it under (the staging layer stages it by this name);
-# `checksum` (sha512) and `download_url` are surfaced for that staging
-# layer's integrity check, exactly as the jdk resolver surfaces them.
+# server serves it under, taken from the URL leaf - NOT files[].name.
+# Microsoft's real feed sets files[].name to the version-LESS
+# 'dotnet-sdk-linux-x64.tar.gz' while only the url leaf carries the version
+# ('.../8.0.100/dotnet-sdk-8.0.100-linux-x64.tar.gz'). The staging layer
+# stages each artifact under its url leaf (Split-Path -Leaf of the download
+# url), so the role must pull by that same leaf or it 404s on the file
+# server; the version-less name would also collide across SDK versions in
+# the shared served directory. `checksum` (sha512) and `download_url` are
+# surfaced for that staging layer's integrity check, as the jdk resolver does.
 - name: Record the resolved release
   ansible.builtin.set_fact:
     dotnet_sdk_resolved_versions: >-
@@ -147,7 +153,7 @@
            'requested': dotnet_sdk_entry.version,
            'channel': dotnet_sdk_entry.channel,
            'version': dotnet_sdk_pick.version,
-           'archive': dotnet_sdk_file.name,
+           'archive': dotnet_sdk_file.url | basename,
            'checksum': dotnet_sdk_file.hash,
            'download_url': dotnet_sdk_file.url
          }] }}

@@ -1,0 +1,13 @@
+---
+# Handlers for the docker role.
+
+# Refresh the apt cache after the Docker apt source is added. Notified by
+# the "Add the Docker apt repository" task and forced to run before the
+# engine install via meta: flush_handlers (see tasks/main.yml for why the
+# refresh is tied to the repo change rather than a time throttle). Because
+# it fires only on notification, a re-run with an unchanged repo does not
+# refresh - which is what keeps the role idempotent.
+- name: Refresh apt cache for the Docker repo
+  ansible.builtin.apt:
+    update_cache: true
+  become: true

@@ -1,0 +1,78 @@
+---
+# Defaults and the input contract for the docker role.
+#
+# This role is the section-3 ("base-image / daemon") toolchain mechanism:
+# unlike section-1 (heavy host-pushed tarballs) or section-2 (small apt/
+# get_url packages the VM pulls itself), a daemon is a rarely-versioned
+# service installed at a coarser grain - its own apt repo, a system
+# service to enable, and group membership so a non-root runner can reach
+# its socket. See the taxonomy in the plan's "three-section tooling
+# taxonomy". Docker is its first (and, in v1, only) consumer.
+#
+# Required input: none. The defaults below install the official Docker CE
+# engine, enable the service, and create the docker group; the one thing a
+# consumer normally sets is docker_group_members, so the runner service
+# user can reach the socket without sudo.
+
+# The Docker Engine package set installed from the official apt repo. These
+# are the packages Docker's own install docs ship together: the engine
+# (docker-ce), the CLI (docker-ce-cli), the containerd runtime, and the
+# buildx / compose plugins that ci-yaml/ci-dotnet steps expect. Left
+# unpinned because a daemon is a rarely-versioned service (section-3): a
+# pin would freeze security updates for little benefit, and Docker's repo
+# only carries a rolling "stable" channel, not the per-version archive an
+# apt pin (like the section-2 toolchain_apt role) relies on. Overridable so
+# a consumer that needs a specific engine build can supply "name=version"
+# entries.
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+# Users to add to the docker group so they can reach the daemon socket
+# (/var/run/docker.sock) without sudo. Empty by default - the role still
+# installs the engine and creates the group, but grants no membership until
+# a consumer names the runner service user here. Membership is additive
+# (append), so listing a user never strips its other groups. SECURITY: the
+# docker group is root-equivalent (a member can bind-mount the host root
+# into a container), so keep this list to the CI runner service account,
+# not interactive logins.
+docker_group_members: []
+
+# The docker group that owns the daemon socket. Installing docker-ce
+# already creates it; the role also ensures it exists explicitly so the
+# membership step below has a group to add to even if the package layout
+# ever changes. Overridable only for parity with a non-default socket
+# group; the default matches Docker's packaging.
+docker_group: docker
+
+# The system service the role enables and starts. Named as a var so the
+# enable/start and any future socket-activation variant read one source of
+# truth rather than a repeated literal.
+docker_service_name: docker
+docker_service_enabled: true
+docker_service_state: started
+
+# Official Docker apt repository coordinates. The GPG key is fetched to a
+# dedicated keyring (docker_apt_keyring_path) and the repo is signed-by
+# that keyring, so the key authorises only Docker's own source and not
+# every apt repo on the box (the modern, non-deprecated apt-key pattern).
+# Overridable so an air-gapped estate can point both at an internal mirror.
+docker_apt_gpg_key_url: https://download.docker.com/linux/ubuntu/gpg
+docker_apt_keyring_path: /etc/apt/keyrings/docker.asc
+docker_apt_repo_base_url: https://download.docker.com/linux/ubuntu
+
+# Docker's repo publishes a single rolling channel; "stable" is the one
+# this role installs. Exposed as a knob rather than hardcoded so a consumer
+# that deliberately wants "test" is a var override, not a fork.
+docker_apt_repo_component: stable
+
+# How long (seconds) the role trusts a previously-refreshed apt cache
+# before updating it again, mirroring toolchain_apt. The refresh after
+# adding the Docker repo is throttled so a re-run inside the window is a
+# genuine no-op (changed: 0), which keeps the role idempotent; a fresh VM
+# (empty cache) always refreshes. One hour matches how rarely the engine
+# package set changes relative to how often the role may be re-applied.
+docker_apt_cache_valid_time: 3600

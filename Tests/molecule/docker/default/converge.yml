@@ -1,0 +1,19 @@
+---
+# Converge - install the Docker CE engine from the official apt repo,
+# enable the service, and add the seeded runner user (cirunner) to the
+# docker group. molecule idempotence re-runs this play and asserts
+# changed: 0.
+#
+# include_role (not import_role) defers resolution to runtime so the
+# molecule.yml ANSIBLE_ROLES_PATH override is honoured.
+
+- name: Converge - install Docker and grant the runner socket access
+  hosts: all
+  gather_facts: false
+  vars:
+    docker_group_members:
+      - cirunner
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: docker

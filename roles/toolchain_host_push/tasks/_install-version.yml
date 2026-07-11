@@ -61,20 +61,36 @@
     mode: "0755"
   become: true
 
-# remote_src: the tarball is already on the managed host (the cache we
-# just pulled), so no controller-side copy. strip_components defaults to
-# 1 - real toolchain tarballs ship a single <tool>-<version>/ wrapper
-# dir; a per-version override covers a flat tarball.
+# Extract via a direct `tar` rather than `ansible.builtin.unarchive`.
+# unarchive lists and checksums every archive member for its own
+# idempotency, which on a ~1000-file JDK dominates the wall clock. This
+# file only runs for the `missing` set (main.yml), so the target dir is
+# always clean-slate and that per-member check buys nothing.
+#
+# Behaviour is matched to the module it replaces:
+#   -xf            GNU tar auto-detects the compression, so the same task
+#                  serves .tar.gz / .tar.xz alike (archive is a basename).
+#   --no-same-owner  extract as the running user (root via become) so every
+#                  member lands root:root - the module's owner/group: root.
+#                  As root, tar restores archive file modes by default, so
+#                  the executable launchers keep their +x with no `mode:`.
+#   --strip-components  same wrapper-dir strip the module did (default 1).
+# creates: a glob under the install dir makes the extract idempotent on
+# its own (belt-and-suspenders - the include is already skipped on re-run)
+# and satisfies the no-changed-when lint without a hand-written guard. The
+# dir was just created empty above, so the glob matches nothing until this
+# runs.
 - name: Extract the tarball into the install directory
-  ansible.builtin.unarchive:
-    src: >-
-      {{ toolchain_host_push_cache_dir }}/{{ toolchain_host_push_target.archive }}
-    dest: "{{ toolchain_host_push_install_dir }}/"
-    remote_src: true
-    owner: root
-    group: root
-    extra_opts:
+  ansible.builtin.command:
+    argv:
+      - tar
+      - -xf
+      - "{{ toolchain_host_push_cache_dir }}/{{ toolchain_host_push_target.archive }}"
+      - -C
+      - "{{ toolchain_host_push_install_dir }}"
+      - --no-same-owner
       - "--strip-components={{ toolchain_host_push_target.strip_components | default(1) }}"
+    creates: "{{ toolchain_host_push_install_dir }}/*"
   become: true
 
 # Non-login-shell PATH via /usr/local/bin (sshd command exec, systemd,
@@ -132,19 +148,32 @@
   register: toolchain_host_push_bin_files
   when: toolchain_host_push_target.symlink_bin_dir | default('') | length > 0
 
+# Batched into one shell round trip instead of a per-file `file:
+# state=link` loop - each item was a module round trip and a bin-subdir
+# tool (the JDK's dozens of launchers) dominated the wall clock. `ln -sfn`
+# mirrors the module exactly: -f + -n retarget an existing link in place
+# (the module's `force: true`), and on Linux a symlink carries no
+# meaningful mode - only its owner, which is root here via `become` - so
+# the dropped mode/owner map cleanly onto ln as root. This runs only for
+# the `missing` set (main.yml), a first install, so `changed_when: true`
+# is always accurate and idempotence is preserved by the include being
+# skipped on a no-op re-run, not by this task.
 - name: Create the /usr/local/bin symlinks for the bin-subdir files
-  ansible.builtin.file:
-    src: "{{ item.path }}"
-    dest: "/usr/local/bin/{{ item.path | basename }}"
-    state: link
-    force: true
-    owner: root
-    group: root
-    mode: "0755"
+  ansible.builtin.shell:
+    # pipefail + bash satisfy ansible-lint's risky-shell-pipe rule, which
+    # flags the `|` in the Jinja filter chain below even though the shell
+    # body itself pipes nothing.
+    cmd: |
+      set -euo pipefail
+      for src in {{ toolchain_host_push_bin_files.files
+                    | default([]) | map(attribute='path')
+                    | map('quote') | join(' ') }}; do
+        ln -sfn "$src" "/usr/local/bin/$(basename "$src")"
+      done
+    executable: /bin/bash
   become: true
-  loop: "{{ toolchain_host_push_bin_files.files | default([]) }}"
-  loop_control:
-    label: "{{ item.path | basename }}"
+  changed_when: true
+  when: toolchain_host_push_bin_files.files | default([]) | length > 0
 
 - name: Record the bin-subdir symlink ownership entries for the manifest
   ansible.builtin.set_fact:

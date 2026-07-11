@@ -14,15 +14,18 @@ was extended by the feature step that earned it.
 ## Index
 
 - [Controller bootstrap](#controller-bootstrap)
+  - [Consumer controller bootstrap](#consumer-controller-bootstrap)
   - [Troubleshooting: WSL default distro has no bash](#troubleshooting-wsl-default-distro-has-no-bash)
   - [Troubleshooting: capturing logs and re-running an interrupted bootstrap](#troubleshooting-capturing-logs-and-re-running-an-interrupted-bootstrap)
 - [Bridge contract](#bridge-contract)
+  - [The toolchains taxonomy block (vm_provisioner_config.toolchains)](#the-toolchains-taxonomy-block-vm_provisioner_configtoolchains)
 - [Reusable roles](#reusable-roles)
   - [Host-push toolchain pattern (toolchain_host_push)](#host-push-toolchain-pattern-toolchain_host_push)
   - [JDK (jdk)](#jdk-jdk)
   - [.NET SDK (dotnet_sdk)](#net-sdk-dotnet_sdk)
   - [.NET global tools (dotnet_tools)](#net-global-tools-dotnet_tools)
   - [Section-2 apt toolchain pattern (toolchain_apt)](#section-2-apt-toolchain-pattern-toolchain_apt)
+  - [Section-3 Docker daemon (docker)](#section-3-docker-daemon-docker)
 - [Tests and lint](#tests-and-lint)
 - [Consuming the substrate](#consuming-the-substrate)
 - [Feature folders](#feature-folders)
@@ -56,6 +59,19 @@ stage installs the missing package via `sudo apt-get`; the existing
 `sudo apt-get install -y <pkg>` hint stays as the fallback path for
 when the install itself cannot proceed (no `sudo`, `apt-get` missing,
 offline, apt lock).
+
+### Consumer controller bootstrap
+
+Substrate consumers (Vm-Provisioner, Vm-Users, GitHubRunners) do not repeat
+this logic. Each ships a ~4-line `ops/bootstrap-controller.sh` shim that
+resolves this sibling and execs the shared
+[`ops/bootstrap-controller-consumer.sh`](ops/bootstrap-controller-consumer.sh),
+the single source of truth for the consumer side. It reuses the controller venv
+that `bootstrap-controller.ps1` (above) builds, delegating to that bootstrap
+only when the venv is absent, and then reports how the consumer's roles resolve
+on `ANSIBLE_ROLES_PATH` (a consumer's own `roles/` ahead of the substrate's, or
+substrate-only when it ships none). It takes the consumer's Ansible-slice root
+as its one argument.
 
 The `sudo` call **prompts for the WSL user's password once per fresh
 bootstrap** (the very first user you set when WSL provisioned the
@@ -282,10 +298,11 @@ compose, the orchestrator itself) stay at the `ops/` root:
   when set, the bridge delegates to `_stage-host-fileserver.sh` and
   (via the EXIT trap) stops the listener it backgrounded on every exit
   path; when unset, neither the listener nor the stop call run, and the
-  file-server-pair extra-vars keys are genuinely absent. Every flow that
-  stages the file server also declares a token (its downstream play
-  consumes one), so `CA_NEEDS_HOST_FILE_SERVER=1` requires
-  `CA_REQUIRES_TOKEN=1` and is rejected fast otherwise. `GH_TOKEN` is
+  file-server-pair extra-vars keys are genuinely absent. The host file
+  server and the GitHub token are independent opt-ins: a flow can serve
+  artifacts consumers pull by name (e.g. toolchain tarballs) with
+  `CA_NEEDS_HOST_FILE_SERVER=1` and no token, and another can require a
+  token with no file server. `GH_TOKEN` is
   lifted to a local when the contract
   requires a token and then cleared from the bridge environment
   unconditionally before `ansible-playbook` runs; the downstream play
@@ -335,14 +352,63 @@ compose, the orchestrator itself) stay at the `ops/` root:
 
 External contract (consumed by feature playbooks): the extra-vars
 document always has the top-level key `vm_provisioner_config` (the
-shared inventory). Every other key is contributed by whichever
-per-domain helper a declared vault dispatched to, and is present only
-when the contract declared that vault (`CA_EXTRA_VAULTS`). The optional
-cross-cutting inputs the bridge forwards - the GitHub token (with
-`CA_REQUIRES_TOKEN=1`) and the host file server URL + artifact version
-(with `CA_NEEDS_HOST_FILE_SERVER=1`, register flow only) - reach the
-helper that consumes them and surface as that helper's keys. The
-inventory has one group `vm_provisioner_hosts` keyed by `vmName`.
+shared inventory). Most other keys are contributed by whichever
+per-domain helper a declared vault dispatched to, and are present only
+when the contract declared that vault (`CA_EXTRA_VAULTS`). One
+cross-cutting key is the exception: with `CA_NEEDS_HOST_FILE_SERVER=1`
+the bridge emits `host_file_server_base_url` from the always-on
+inventory fragment, so the URL reaches the roles whether or not any
+extra vault is declared (the file server is a property of the run, not
+of a vault). The GitHub token (with `CA_REQUIRES_TOKEN=1`) still reaches
+only the declared vault helper that consumes it and surfaces as that
+helper's key. The inventory has one group `vm_provisioner_hosts` keyed
+by `vmName`.
+
+### The toolchains taxonomy block (vm_provisioner_config.toolchains)
+
+Each VM definition in the provisioner config carries an optional
+`toolchains` block declaring which tools land on that box, classified by
+**how each is acquired** (the three-section acquisition taxonomy):
+
+```json
+{
+  "vmName": "ubuntu-02-ci",
+  "toolchains": {
+    "hostPushed":   [ { "name": "jdk",        "version": "21.0.2+13" } ],
+    "vmDownloaded": [ { "name": "shellcheck", "version": "0.9.0-1"  } ],
+    "baseImage":    [ { "name": "docker" } ]
+  }
+}
+```
+
+- `hostPushed` - section 1: heavy artifacts the host caches once and
+  pushes over the file server (JDK, .NET SDK), consumed by the
+  [host-push roles](#host-push-toolchain-pattern-toolchain_host_push).
+- `vmDownloaded` - section 2: small packages the VM fetches itself,
+  consumed by [`toolchain_apt`](#section-2-apt-toolchain-pattern-toolchain_apt).
+- `baseImage` - section 3: daemons installed at a coarser grain,
+  consumed by the [`docker`](#section-3-docker-daemon-docker) role.
+
+The block lives in the existing per-VM secret (one per-VM SSOT); the
+config is surfaced whole under `vm_provisioner_config`, so the block rides
+along untouched and a consumer playbook dispatches each section into its
+roles' vars (the substrate ships no such playbook - that mapping is the
+consumer's, keeping the naming honest).
+
+Validation is split by ownership. The substrate validates only the
+**outer taxonomy shape** - at the surfacing point, in
+[`ops/virtual-machines/_validate-toolchains-config.sh`](ops/virtual-machines/_validate-toolchains-config.sh):
+the block must be an object, name none but the three known sections, and
+give each present section as a list; a violation fails the run with a
+message naming the VM and the offending section. Each toolchain **role**
+validates its own section's **entries** (e.g. `toolchain_apt` asserts
+every entry names a package). The section boundary is only visible before
+dispatch, so an unknown-section message can only come from the taxonomy
+layer - which is why the shape check lives here rather than in a role. The
+block is optional and absent-safe: a VM with no `toolchains` key validates
+and provisions exactly as before. The PowerShell config validator ignores
+the block (it validates required fields and tolerates extra keys), so the
+Ansible taxonomy and the reconciler schema coexist in one secret.
 
 `jq` is a hard runtime dependency (JSON validation, inventory and
 extra-vars composition); [`ops/_bootstrap-controller-wsl.sh`](ops/_bootstrap-controller-wsl.sh)
@@ -467,6 +533,27 @@ Its shipped use is shellcheck pinned to `0.9.0-1` (the apt candidate on the
 target's Ubuntu 24.04), which unblocks the `ci-bash` shellcheck step on the
 runner VM without a runtime install. Full var contract and the molecule
 scenario are in the [role README](roles/toolchain_apt/README.md).
+
+### Section-3 Docker daemon (docker)
+
+[`roles/docker`](roles/docker/) is the **section-3** ("base-image /
+daemon") toolchain mechanism - the counterpart to the section-1 host-push
+and section-2 apt patterns. A daemon is a rarely-versioned service, so it
+is installed at a coarser grain: Docker's own apt repo (GPG key in a
+dedicated keyring, `signed-by`-scoped so it authorises only Docker's
+source), the Docker CE engine package set, the `docker` systemd service
+enabled and started, and the runner service user added to the `docker`
+group so it reaches the socket without sudo. Group membership is the one
+var a consumer normally sets (`docker_group_members`); it is additive and,
+because the group is root-equivalent, deliberately opt-in rather than
+granted automatically. Provisioned by an Ansible role rather than
+base-image baking because this estate has no golden-image pipeline (see the
+role README for the rationale).
+
+The molecule scenario is genuine docker-in-docker - a privileged,
+systemd-init container so the inner daemon really starts and `verify` can
+run `docker ps`. Full var contract, the security note, and the
+docker-in-docker caveat are in the [role README](roles/docker/README.md).
 
 ## Tests and lint
 

@@ -1,0 +1,78 @@
+---
+# Verify the post-converge state: the engine is installed and on PATH, the
+# service is active, the daemon is reachable (docker ps), and the runner
+# user is in the docker group without having lost its marker group.
+# Idempotence (re-run reports changed: 0) is checked by `molecule
+# idempotence` in the default sequence; this file asserts the state the
+# converge produced.
+
+- name: Verify - Docker engine, service, daemon, and group membership
+  hosts: all
+  gather_facts: false
+  vars:
+    test_runner_user: cirunner
+    test_marker_group: probe
+  tasks:
+    # On PATH: the ci-yaml/ci-dotnet steps invoke the docker CLI, so resolve
+    # it through PATH rather than a fixed path.
+    - name: Resolve docker on PATH
+      ansible.builtin.command: which docker
+      register: docker_which
+      changed_when: false
+
+    - name: Assert docker is on PATH
+      ansible.builtin.assert:
+        that:
+          - docker_which.rc == 0
+          - docker_which.stdout | length > 0
+        fail_msg: "docker did not resolve on PATH: {{ docker_which }}"
+
+    # Service enabled+active - the role's whole point is a running daemon
+    # that survives reboot, not merely an installed package. systemctl (not
+    # the systemd module) is deliberate: verify observes the live runtime
+    # state after converge, which a module's own return value cannot report
+    # here - hence the command-instead-of-module noqa.
+    - name: Query the docker service state
+      ansible.builtin.command: systemctl is-active docker  # noqa: command-instead-of-module
+      register: docker_is_active
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the docker service is active
+      ansible.builtin.assert:
+        that:
+          - docker_is_active.stdout == "active"
+        fail_msg: >-
+          docker service is not active (systemctl is-active reported
+          '{{ docker_is_active.stdout }}').
+
+    # Daemon reachable: docker ps talks to the socket, proving the inner
+    # daemon actually started (the docker-in-docker path). A present-but-
+    # dead daemon would fail here even though `which docker` passed.
+    - name: Run docker ps against the live daemon
+      ansible.builtin.command: docker ps
+      register: docker_ps
+      changed_when: false
+
+    - name: Assert the daemon answered docker ps
+      ansible.builtin.assert:
+        that:
+          - docker_ps.rc == 0
+        fail_msg: "docker ps did not reach the daemon: {{ docker_ps.stderr }}"
+
+    # The runner user is in the docker group (the plan's group check) AND
+    # still in its marker group - proving the role appended rather than
+    # replaced the user's groups.
+    - name: Read the runner user's groups
+      ansible.builtin.command: "id -nG {{ test_runner_user }}"
+      register: runner_groups
+      changed_when: false
+
+    - name: Assert the runner is in the docker group without losing the marker group
+      ansible.builtin.assert:
+        that:
+          - "'docker' in runner_groups.stdout.split()"
+          - "test_marker_group in runner_groups.stdout.split()"
+        fail_msg: >-
+          {{ test_runner_user }} groups are '{{ runner_groups.stdout }}';
+          expected both 'docker' and '{{ test_marker_group }}'.

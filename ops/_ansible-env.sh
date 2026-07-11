@@ -118,3 +118,32 @@ export ANSIBLE_SSH_ARGS="-C -o ControlMaster=auto -o ControlPersist=60s -o UserK
 # retries absorb that transient without masking a dead host (which
 # fails every attempt). Only connection setup is retried, not tasks.
 export ANSIBLE_SSH_RETRIES=3
+
+# Mirrors `pipelining = True` from ../ansible.cfg [ssh_connection]. Runs each
+# module over the persistent SSH connection instead of the default sftp-temp-
+# file + exec + cleanup three-round-trip dance. Each round trip is costly over
+# the two-hop proxy (host portproxy -> router -W-> guest), and the toolchain
+# roles are loop-heavy (the JDK bin/ symlink loop is ~40 per-item tasks, ~80s of
+# round-trip overhead per run), so collapsing three trips into one roughly halves
+# it. Safe here: Ubuntu cloud images do not set sudoers `requiretty`, the one
+# condition that breaks pipelining with become.
+export ANSIBLE_PIPELINING=True
+
+# Callback plugin search path (mirrors `callback_plugins` in ../ansible.cfg).
+# Holds timing_tree - the aggregate callback that records each task's duration
+# and writes the per-task rows the bash timing emitter (Common-Automation
+# scripts/timing.sh) grafts under the toolchain run's `run playbook` span, so
+# the per-task breakdown lands in the same e2e-timing tree as the rest of the
+# flow. Exported always: a search path is inert until a callback is enabled.
+export ANSIBLE_CALLBACK_PLUGINS="${repo_root}/callback_plugins"
+
+# Enable the timing_tree callback ONLY when a per-task rows target is set. The
+# toolchain wrapper (provision-toolchains.sh) sets TIMING_TASKS_OUTPUT_PATH for a
+# timed run and leaves it unset otherwise, so an uninstrumented run pays nothing.
+# Env-gated, so there is deliberately no static `callbacks_enabled` cfg key - the
+# asymmetry is documented in ../ansible.cfg. timing_tree is an aggregate
+# callback: it runs ALONGSIDE the default stdout callback, and self-gates on the
+# same var, so enabling it on an untimed run would still write nothing.
+if [[ -n "${TIMING_TASKS_OUTPUT_PATH:-}" ]]; then
+    export ANSIBLE_CALLBACKS_ENABLED="timing_tree${ANSIBLE_CALLBACKS_ENABLED:+,${ANSIBLE_CALLBACKS_ENABLED}}"
+fi

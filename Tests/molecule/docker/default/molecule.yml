@@ -1,0 +1,62 @@
+---
+# Molecule scenario for the docker role - install the Docker CE engine from
+# the official apt repo on a fresh Ubuntu 24.04 target, enable the service,
+# add a test user to the docker group, and prove the daemon is reachable
+# (docker ps), all idempotently.
+#
+# The docker-in-docker caveat (see the role README): a daemon-install role
+# cannot be tested in an ordinary sleep-infinity container. This scenario
+# therefore boots a systemd init (so the role's systemd_service task manages
+# a real unit) inside a privileged container (so the inner Docker daemon
+# gets the kernel capabilities to actually start). That is genuine
+# docker-in-docker - verify runs `docker ps` against a live daemon, not a
+# mocked one.
+#
+# Image: the systemd-capable base built by Tests/molecule/docker/Dockerfile
+# (systemd + python3 + sudo on ubuntu:24.04). Build it via the command in
+# that Dockerfile's header.
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: instance
+    image: common-ansible/docker-systemd-base:24.04
+    pre_build_image: true
+    # systemd as PID 1 - the role enables/starts the docker unit.
+    command: /usr/sbin/init
+    # docker-in-docker: the inner daemon needs privileged kernel access
+    # (cgroups, netfilter, overlay) it cannot get unprivileged. cgroupns
+    # host + the cgroup mount let systemd manage cgroups under Docker
+    # Desktop's cgroup v2.
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    # ANSIBLE_ROLES_PATH (env) wins over ansible.cfg's roles_path and
+    # propagates across every molecule phase. MOLECULE_PROJECT_DIRECTORY
+    # is the scenario dir; three levels up is the repo root, then roles/.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../../roles"
+  config_options:
+    defaults:
+      stdout_callback: yaml
+      callbacks_enabled: profile_tasks
+  inventory:
+    host_vars:
+      instance:
+        ansible_user: root
+
+verifier:
+  name: ansible
