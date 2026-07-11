@@ -22,6 +22,7 @@ was extended by the feature step that earned it.
   - [JDK (jdk)](#jdk-jdk)
   - [.NET SDK (dotnet_sdk)](#net-sdk-dotnet_sdk)
   - [.NET global tools (dotnet_tools)](#net-global-tools-dotnet_tools)
+  - [Section-2 apt toolchain pattern (toolchain_apt)](#section-2-apt-toolchain-pattern-toolchain_apt)
 - [Tests and lint](#tests-and-lint)
 - [Consuming the substrate](#consuming-the-substrate)
 - [Feature folders](#feature-folders)
@@ -446,6 +447,26 @@ teardown ordering the PowerShell children-walker guaranteed. It ports the
 reconciler's `DotnetToolsProvider`; full contract, the ordering rationale,
 and the molecule scenarios are in the
 [role README](roles/dotnet_tools/README.md).
+
+### Section-2 apt toolchain pattern (toolchain_apt)
+
+[`roles/toolchain_apt`](roles/toolchain_apt/) is the shared **section-2**
+("VM-downloaded") toolchain mechanism - the counterpart to the section-1
+host-push pattern. Small distro packages (shellcheck, bats) are not worth
+host-staging and pushing over the file server: apt on the target fetches
+them itself over its normal egress, and apt is already the installed-state
+source of truth, giving idempotent install and removal for free. So the
+role is deliberately thin - no host staging, no file server, no manifest.
+It installs a set of `{name, version}` entries in one apt transaction at
+`state: present` with `allow_downgrade`, so an exact pin is authoritative
+and re-provision-safe. The one task that could report a spurious change,
+the apt cache refresh, is throttled by `toolchain_apt_cache_valid_time` so
+a re-run is a genuine no-op.
+
+Its shipped use is shellcheck pinned to `0.9.0-1` (the apt candidate on the
+target's Ubuntu 24.04), which unblocks the `ci-bash` shellcheck step on the
+runner VM without a runtime install. Full var contract and the molecule
+scenario are in the [role README](roles/toolchain_apt/README.md).
 
 ## Tests and lint
 

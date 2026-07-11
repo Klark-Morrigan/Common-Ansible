@@ -1,0 +1,58 @@
+---
+# Verify the post-converge state: shellcheck is present, on PATH, and at
+# the pinned version. Idempotence (re-run reports changed: 0) is checked
+# by `molecule idempotence` in the default sequence; this file asserts the
+# state the install produced.
+
+- name: Verify - pinned shellcheck install post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    expected_version: "0.9.0"
+    expected_apt_version: "0.9.0-1"
+  tasks:
+    # On PATH: the whole point of the section-2 install is a runnable tool
+    # for the ci-bash step, so resolve it through PATH rather than a fixed
+    # /usr/bin path.
+    - name: Resolve shellcheck on PATH
+      ansible.builtin.command: which shellcheck
+      register: shellcheck_which
+      changed_when: false
+
+    - name: Assert shellcheck is on PATH
+      ansible.builtin.assert:
+        that:
+          - shellcheck_which.rc == 0
+          - shellcheck_which.stdout | length > 0
+        fail_msg: "shellcheck did not resolve on PATH: {{ shellcheck_which }}"
+
+    # Runs and reports the pinned upstream version - proves the binary is
+    # functional, not merely unpacked.
+    - name: Run shellcheck --version
+      ansible.builtin.command: shellcheck --version
+      register: shellcheck_version
+      changed_when: false
+
+    - name: Assert the running shellcheck reports the pinned version
+      ansible.builtin.assert:
+        that:
+          - "'version: ' ~ expected_version in shellcheck_version.stdout"
+        fail_msg: >-
+          shellcheck --version did not report {{ expected_version }}:
+          {{ shellcheck_version.stdout }}
+
+    # apt agrees the installed package is the exact pinned version - guards
+    # the pin itself (a drifted-ahead build would fail here even if the
+    # upstream version string still read 0.9.0).
+    - name: Query the installed apt version of shellcheck
+      ansible.builtin.command: dpkg-query -W -f '${Version}' shellcheck
+      register: shellcheck_dpkg
+      changed_when: false
+
+    - name: Assert apt installed the exact pinned version
+      ansible.builtin.assert:
+        that:
+          - shellcheck_dpkg.stdout == expected_apt_version
+        fail_msg: >-
+          installed apt version is {{ shellcheck_dpkg.stdout }}, expected
+          {{ expected_apt_version }}

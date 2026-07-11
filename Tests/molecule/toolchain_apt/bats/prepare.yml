@@ -1,0 +1,25 @@
+---
+# Prepare the bats scenario: assert the absent baseline. bats is not in the
+# shared base image, so this documents (and enforces) the "absent" half of
+# "absent then present" before the converge installs it - if a future base
+# image started shipping bats, this would fail here rather than letting the
+# converge's install pass vacuously.
+
+- name: Prepare - assert bats is absent before converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look for a bats on PATH
+      ansible.builtin.command: which bats
+      register: prepare_bats_which
+      changed_when: false
+      failed_when: false
+
+    - name: Assert bats is not yet installed
+      ansible.builtin.assert:
+        that:
+          - prepare_bats_which.rc != 0
+        fail_msg: >-
+          bats is already on PATH before converge
+          ({{ prepare_bats_which.stdout }}); the absent baseline this
+          scenario relies on no longer holds.

@@ -1,0 +1,20 @@
+---
+# Converge - install the role's second shipped section-2 use: bats pinned
+# to the apt candidate on Ubuntu 24.04 (1.10.0-1). The role refreshes the
+# apt cache and installs the exact version; molecule idempotence re-runs
+# this play and asserts changed: 0.
+#
+# include_role (not import_role) defers resolution to runtime so the
+# molecule.yml ANSIBLE_ROLES_PATH override is honoured.
+
+- name: Converge - install bats via the section-2 apt role
+  hosts: all
+  gather_facts: false
+  vars:
+    toolchain_apt_packages:
+      - name: bats
+        version: "1.10.0-1"
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: toolchain_apt

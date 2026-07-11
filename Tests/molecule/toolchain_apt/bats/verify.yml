@@ -1,0 +1,90 @@
+---
+# Verify the post-converge state: bats is present, on PATH, at the pinned
+# version, and can actually run a .bats file. Idempotence (re-run reports
+# changed: 0) is checked by `molecule idempotence` in the default sequence;
+# this file asserts the state the install produced.
+
+- name: Verify - pinned bats install post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    expected_version: "1.10.0"
+    expected_apt_version: "1.10.0-1"
+  tasks:
+    # On PATH: the whole point of the section-2 install is a runnable tool
+    # for the ci-bash test step, so resolve it through PATH rather than a
+    # fixed /usr/bin path.
+    - name: Resolve bats on PATH
+      ansible.builtin.command: which bats
+      register: bats_which
+      changed_when: false
+
+    - name: Assert bats is on PATH
+      ansible.builtin.assert:
+        that:
+          - bats_which.rc == 0
+          - bats_which.stdout | length > 0
+        fail_msg: "bats did not resolve on PATH: {{ bats_which }}"
+
+    # Runs and reports the pinned upstream version - proves the binary is
+    # functional, not merely unpacked. `bats --version` prints "Bats 1.10.0".
+    - name: Run bats --version
+      ansible.builtin.command: bats --version
+      register: bats_version
+      changed_when: false
+
+    - name: Assert the running bats reports the pinned version
+      ansible.builtin.assert:
+        that:
+          - "'Bats ' ~ expected_version in bats_version.stdout"
+        fail_msg: >-
+          bats --version did not report {{ expected_version }}:
+          {{ bats_version.stdout }}
+
+    # apt agrees the installed package is the exact pinned version - guards
+    # the pin itself (a drifted-ahead build would fail here even if the
+    # upstream version string still read 1.10.0).
+    - name: Query the installed apt version of bats
+      ansible.builtin.command: dpkg-query -W -f '${Version}' bats
+      register: bats_dpkg
+      changed_when: false
+
+    - name: Assert apt installed the exact pinned version
+      ansible.builtin.assert:
+        that:
+          - bats_dpkg.stdout == expected_apt_version
+        fail_msg: >-
+          installed apt version is {{ bats_dpkg.stdout }}, expected
+          {{ expected_apt_version }}
+
+    # A trivial .bats file runs green - the end-to-end proof the plan asks
+    # for. shellcheck only needs to report a version, but bats is a test
+    # runner: "installed and on PATH" is not the same as "can execute a
+    # test", so drop a one-assertion .bats file and run it. Under molecule's
+    # non-TTY capture bats emits TAP (`1..1` then `ok 1 ...`), not the pretty
+    # "N tests, M failures" tally, so assert on the TAP line plus the absence
+    # of any `not ok`. rc 0 with a passing `ok` proves the runner works, not
+    # just that the binary is on PATH.
+    - name: Drop a trivial .bats file
+      ansible.builtin.copy:
+        dest: /tmp/trivial.bats
+        mode: "0644"
+        content: |
+          @test "true succeeds" {
+            true
+          }
+
+    - name: Run the trivial .bats file
+      ansible.builtin.command: bats /tmp/trivial.bats
+      register: bats_run
+      changed_when: false
+
+    - name: Assert the trivial .bats file passed
+      ansible.builtin.assert:
+        that:
+          - bats_run.rc == 0
+          - "'ok 1 true succeeds' in bats_run.stdout"
+          - "'not ok' not in bats_run.stdout"
+        fail_msg: >-
+          the trivial .bats file did not run green:
+          rc={{ bats_run.rc }} stdout={{ bats_run.stdout }}

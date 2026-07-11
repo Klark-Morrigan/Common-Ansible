@@ -1,0 +1,40 @@
+---
+# Defaults and the input contract for the toolchain_apt role.
+#
+# This role is the shared section-2 "VM-downloaded" toolchain mechanism:
+# the target VM fetches small packages itself from its apt archive, at a
+# pinned version, idempotently. It is the section-2 counterpart to the
+# section-1 host-push pattern (roles/toolchain_host_push) - where that
+# pattern caches heavy tarballs on the host and pushes them over the
+# substrate file server, this one leans on apt for tools small enough to
+# pull straight from the distro (shellcheck, bats). See the taxonomy in
+# the plan's "three-section tooling taxonomy".
+#
+# Required input: none. With the empty default below the role is a no-op
+# (it touches the apt cache and nothing else), so a play can always
+# include it and let config decide what - if anything - to install.
+#
+# toolchain_apt_packages - the desired apt packages. Each entry:
+#
+#   name     (required) apt package name (e.g. "shellcheck").
+#   version  (optional) exact apt version to pin (e.g. "0.9.0-1"). When
+#                       set, the role installs precisely that version and
+#                       downgrades if a newer one is present, so the pin
+#                       is authoritative and re-provision-safe. Omitted
+#                       means "whatever apt's candidate is" (state present,
+#                       no upgrade of an already-installed package).
+#
+# A pin is strongly preferred for a CI toolchain: an unpinned package
+# drifts as the archive moves, which is exactly the reproducibility this
+# role exists to remove. The shipped, tested use is shellcheck at
+# 0.9.0-1 (the apt candidate on the target's Ubuntu 24.04) - see the role
+# README.
+toolchain_apt_packages: []
+
+# How long (seconds) the role trusts a previously-refreshed apt cache
+# before updating it again. The cache refresh is throttled so that a
+# re-run within this window is a genuine no-op (changed: 0), which is what
+# keeps the role idempotent; the first run on a fresh VM (empty cache)
+# always refreshes. One hour matches how rarely a pinned package set
+# changes relative to how often the role may be re-applied.
+toolchain_apt_cache_valid_time: 3600

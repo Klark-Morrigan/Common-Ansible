@@ -1,0 +1,25 @@
+---
+# Prepare the default scenario: assert the absent baseline. shellcheck is
+# not in the shared base image, so this documents (and enforces) the
+# "absent" half of "absent then present" before the converge installs it -
+# if a future base image started shipping shellcheck, this would fail here
+# rather than letting the converge's install pass vacuously.
+
+- name: Prepare - assert shellcheck is absent before converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look for a shellcheck on PATH
+      ansible.builtin.command: which shellcheck
+      register: prepare_shellcheck_which
+      changed_when: false
+      failed_when: false
+
+    - name: Assert shellcheck is not yet installed
+      ansible.builtin.assert:
+        that:
+          - prepare_shellcheck_which.rc != 0
+        fail_msg: >-
+          shellcheck is already on PATH before converge
+          ({{ prepare_shellcheck_which.stdout }}); the absent baseline
+          this scenario relies on no longer holds.
