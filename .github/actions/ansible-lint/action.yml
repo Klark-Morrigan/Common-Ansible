@@ -1,0 +1,34 @@
+name: ansible-lint
+description: >
+  Lints Ansible content (playbooks, roles, ansible.cfg) in the caller
+  repo by invoking ansible-lint directly from PATH - the caller
+  (ci-ansible.yml, or the local pre-push runner) must put the pinned
+  controller venv's bin/ on PATH first, so the exact
+  ansible-lint/ansible-core closure from requirements.txt runs. There is
+  no docker image, no version getter, and no per-run pip install here;
+  all logic lives in the adjacent ansible-lint.sh so detection and
+  config resolution stay a single source of truth shared with the local
+  runner.
+
+  Auto-skips silently with a `::notice::` when none of ansible.cfg,
+  playbooks/, or roles/ exists at the caller repo root, so the action is
+  safe to wire into every consumer's CI regardless of whether they have
+  Ansible content.
+
+  If the consumer repo has a .ansible-lint / .ansible-lint.yml /
+  .ansible-lint.yaml at its root the action uses it; otherwise the
+  bundled ansible-lint.config.yml (strict `production` profile) applies,
+  so the bar is single-sourced.
+
+runs:
+  using: composite
+  steps:
+    - name: ansible-lint
+      shell: bash
+      # All logic lives in ansible-lint.sh so detection, config
+      # resolution, and the ansible-lint invocation stay a single source
+      # of truth - the local pre-push runner invokes the same helper
+      # rather than re-deriving them. The venv bin/ is expected on PATH
+      # already (put there by the workflow / local runner).
+      run: |
+        '${{ github.action_path }}/ansible-lint.sh'
