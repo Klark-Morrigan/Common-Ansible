@@ -657,14 +657,24 @@ jobs:
 The job checks out the caller, then - only when the caller is not
 Common-Ansible itself - sparse-checks-out this repo at `master` into
 `.common-ansible/` (the toolchain lockfile, the bundled config, and the
-substrate `roles/`). It sets `ANSIBLE_ROLES_PATH` to the caller's own
-`roles/` ahead of the substrate `roles/`, so a consumer's roles resolve by
-short name while reusing substrate roles. The caller's repo stays the lint
-target (`--project-dir`); the sibling checkout only supplies the toolchain
-and config. On self runs the branch collapses to this repo's own
-workspace. This sibling-checkout + roles-path scaffold is shared wiring
-that [feature 21](docs/dev/implementation/21-molecule-ci-in-common-ansible/problem.md)'s
-molecule gate reuses.
+substrate `roles/`). The caller's repo stays the lint target
+(`--project-dir` = repo root); the sibling checkout only supplies the
+toolchain and config. On self runs the branch collapses to this repo's own
+workspace.
+
+The lint pass deliberately does **not** export an `ANSIBLE_ROLES_PATH`.
+That env var overrides a caller's root `ansible.cfg` `roles_path`, and the
+consumers keep their Ansible content in a nested `hyper-v/ubuntu/Ansible/`
+slice resolved by a root-cfg **lint shim**
+(`roles_path = hyper-v/ubuntu/Ansible/roles`); an env override would
+clobber the shim and the nested roles would stop resolving. Roles
+resolution during lint is therefore governed by each caller's root cfg -
+this repo's real cfg on self runs, the consumers' shim on consumer runs.
+Pushing the substrate `roles/` onto the path is a molecule-only need
+(converge must load the substrate roles), so that export belongs to
+[feature 21](docs/dev/implementation/21-molecule-ci-in-common-ansible/problem.md)'s
+molecule gate, not this lint job. The sibling-checkout scaffold itself is
+shared wiring that the molecule gate reuses.
 
 Runner selection, highest precedence first: the `runner` input (a per-call
 or `workflow_dispatch` override), else the caller's `CI_ANSIBLE_RUNNER`
@@ -688,6 +698,34 @@ to provide, closed on two axes (see problem.md's
 - **Pinned interpreter.** `setup-python` pins the Python minor (3.12) to
   the controller's Ubuntu 24.04 interpreter, so the closure resolves
   against a fixed base.
+
+**Where the toolchain comes from - hosted vs self-hosted.** *Whether* to
+install is decided at runtime on `runner.environment`, not on a runner
+label (a self-hosted pool is targeted by an arbitrary custom label no
+inspection could classify), the same way Common-DotNet's `ci-dotnet.yml`
+gates its provisioning:
+
+- **`github-hosted`.** A bare image carries no controller, so the job
+  installs the hash-locked closure into a `setup-python` interpreter (the
+  hosted-path hermeticity boundary above). The controller provider cannot
+  run here - it reaches the substrate bootstrap through `pwsh.exe`/WSL, a
+  Windows entry point absent on a bare ubuntu image.
+- **`self-hosted`.** The runner image is expected to carry the controller
+  venv pre-baked - how the pool is provisioned is the runner operator's
+  concern, external to this workflow - so the job reuses it rather than
+  installing a second, divergent copy. A consumer reuses it through the
+  substrate's SSOT
+  [`ops/bootstrap-controller-consumer.sh`](ops/bootstrap-controller-consumer.sh)
+  (a no-op when the venv is already baked); Common-Ansible's own runs
+  assert their repo `.venv` is present and reuse it. No `setup-python` /
+  `pip` / `galaxy` runs on this path.
+
+Whichever path runs puts its toolchain `bin` on `$GITHUB_PATH`, so the
+ansible-lint composite resolves one `ansible-lint`. A consumer whose
+Ansible content is nested (e.g. `hyper-v/ubuntu/Ansible`) can pass its
+slice root via the `ansible-slice-root` input for an accurate provider
+summary; it does not affect the lint pass, which always targets the repo
+root.
 
 **Config: strict by default, consumer-overridable.** With no consumer
 config the bundled

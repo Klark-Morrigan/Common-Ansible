@@ -6,23 +6,54 @@
 # toolchain.
 #
 # Execution model - a controller venv, not a Docker image. The old
-# Common-Automation gate built a Docker image per run; this one installs
-# the exact hash-locked `ansible-core` + `ansible-lint` closure from
-# `requirements.txt` into a `setup-python` interpreter and runs
-# `ansible-lint` straight from PATH. The lockfile is the reproducibility
-# boundary the image used to provide (see feature 20's problem.md
-# hermeticity note); the interpreter minor is pinned here to complete it.
+# Common-Automation gate built a Docker image per run; this one runs
+# `ansible-lint` straight from a controller venv on PATH. The lockfile is
+# the reproducibility boundary the image used to provide (see feature 20's
+# problem.md hermeticity note); the interpreter minor is pinned to complete
+# it.
+#
+# WHERE that venv comes from is decided at runtime on `runner.environment`,
+# not on a runner label - a self-hosted *pool* is targeted by an arbitrary
+# custom label no inspection could classify as hosted-or-not, so the
+# runtime environment is authoritative (the same rationale Common-DotNet's
+# `ci-dotnet.yml` documents). Two provisioning paths, crossed with the
+# self/consumer split (four combinations):
+#
+#   - `github-hosted`: a bare image carries no controller, so install the
+#     hash-locked `ansible-core` + `ansible-lint` closure from
+#     `requirements.txt` into a `setup-python` interpreter. This inline
+#     install is the hosted-path hermeticity boundary; the controller
+#     provider cannot run here (it reaches the substrate bootstrap through
+#     `pwsh.exe`/WSL, a Windows entry point absent on a bare ubuntu image).
+#   - `self-hosted`: the runner image is expected to carry the controller
+#     pre-baked (the runner operator's concern, not this workflow's), so
+#     reuse it instead of installing a second, divergent copy. A consumer
+#     reuses it through the substrate's SSOT
+#     `ops/bootstrap-controller-consumer.sh` (a no-op when the venv is
+#     already baked); Common-Ansible's own self-hosted runs assert their
+#     repo `.venv` is present (its own bootstrap-controller owns building
+#     it) and reuse it.
+#
+# Whichever path runs puts its toolchain bin on `$GITHUB_PATH` - the
+# `setup-python` scripts dir (hosted) or the controller `.venv/bin`
+# (self-hosted) - so the ansible-lint composite resolves one `ansible-lint`.
 #
 # One `ansible` job runs as sequential steps sharing a single checkout,
 # for the same reasons ci-yaml.yml gives: one PR status check
 # (`ci-ansible / ansible`) instead of several, and an implicit
 # `success()` guard on each step so a failure short-circuits the rest.
 #
-# Shared sibling-checkout + roles-path wiring. Steps 2-6 (stage the
-# substrate, install the toolchain, install collections, export
-# ANSIBLE_ROLES_PATH) are the reusable Ansible-run scaffold that feature
-# 21's molecule workflow reuses - this workflow owns that wiring so the
-# two gates resolve short-name roles and the pinned toolchain identically.
+# Shared sibling-checkout + toolchain wiring. Staging the substrate,
+# installing the toolchain, and installing collections are the reusable
+# Ansible-run scaffold that feature 21's molecule workflow reuses - this
+# workflow owns that wiring so the two gates resolve the pinned toolchain
+# identically. The lint pass deliberately does NOT export an
+# ANSIBLE_ROLES_PATH: that env var overrides a caller's root ansible.cfg
+# `roles_path`, which would clobber the consumers' nested-slice lint shim
+# (`roles_path = hyper-v/ubuntu/Ansible/roles`) and lose the nested roles.
+# Roles resolution during lint is governed by each caller's root cfg
+# instead; resolving substrate roles onto the path is a molecule need, so
+# that export belongs to feature 21's molecule job, not here.
 #
 # Self vs consumer. When this workflow runs on its own PRs
 # (`github.repository == Klark-Morrigan/Common-Ansible`) it uses its own
@@ -30,8 +61,8 @@
 # calls it, the consumer's workspace has none of those, so the job first
 # sparse-checks-out Common-Ansible at `master` into `.common-ansible/` and
 # every substrate reference points there. The consumer's own repo remains
-# the lint target (`--project-dir`), with its `roles/` leading the
-# search path and the substrate `roles/` appended for short-name reuse.
+# the lint target (`--project-dir` = repo root); short-name roles resolve
+# through its root ansible.cfg (the lint shim), not an env override.
 #
 # The ansible-lint composite is referenced by a local `./` path, never a
 # fully-qualified `@master` ref, for the reason ci-yaml.yml documents:
@@ -71,6 +102,16 @@ on:
         required: false
         type: string
         default: ''
+      ansible-slice-root:
+        description: >-
+          Consumer's Ansible-slice root (e.g. `hyper-v/ubuntu/Ansible`),
+          relative to the repo root. Handed to the self-hosted controller
+          provider only for its roles-path summary; the lint pass itself
+          always targets the repo root. Defaults to the repo root, so a
+          repo whose Ansible content is at root needs no value.
+        required: false
+        type: string
+        default: '.'
   workflow_call:
     inputs:
       runner:
@@ -82,6 +123,16 @@ on:
         required: false
         type: string
         default: ''
+      ansible-slice-root:
+        description: >-
+          Consumer's Ansible-slice root (e.g. `hyper-v/ubuntu/Ansible`),
+          relative to the repo root. Handed to the self-hosted controller
+          provider only for its roles-path summary; the lint pass itself
+          always targets the repo root. Defaults to the repo root, so a
+          consumer whose Ansible content is at root needs no value.
+        required: false
+        type: string
+        default: '.'
 
 jobs:
   ansible:
@@ -98,10 +149,12 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
       # Consumers do not have Common-Ansible's toolchain lockfile, bundled
-      # config, or substrate roles/ in their workspace; stage them once at
-      # master into .common-ansible/ for every substrate reference below.
-      # Cone mode off so the individual file paths (requirements.*,
-      # ansible.cfg) are honoured alongside the directory paths.
+      # config, substrate roles/, or the controller-provider script in their
+      # workspace; stage them once at master into .common-ansible/ for every
+      # substrate reference below. `ops` brings the self-hosted controller
+      # provider (bootstrap-controller-consumer.sh) the consumer's
+      # self-hosted path execs. Cone mode off so the individual file paths
+      # (requirements.*, ansible.cfg) are honoured alongside the dir paths.
       - name: Stage Common-Ansible substrate
         if: github.repository != 'Klark-Morrigan/Common-Ansible'
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
@@ -111,6 +164,7 @@ jobs:
           path: .common-ansible
           sparse-checkout: |
             .github/actions
+            ops
             requirements.txt
             requirements.yml
             ansible.cfg
@@ -118,30 +172,42 @@ jobs:
           sparse-checkout-cone-mode: false
 
       # Resolve the substrate root once. `.` on self runs, `.common-ansible`
-      # on consumer runs. The pip/galaxy/roles-path steps below are plain
-      # `run:` blocks (not `uses:`), so a single computed path keeps them
-      # DRY - only the composite step needs the if-guarded self/consumer
-      # pair (the eager-resolution constraint documented in the header).
-      # ANSIBLE_ROLES_PATH mirrors ops/_ansible-env.sh: the caller's own
-      # roles/ leads so its roles resolve by short name, with the substrate
-      # roles/ appended so reusable substrate roles still resolve. On self
-      # runs the two collapse to the single workspace roles/.
+      # on consumer runs. The pip/galaxy steps below are plain `run:` blocks
+      # (not `uses:`), so a single computed path keeps them DRY - only the
+      # composite step needs the if-guarded self/consumer pair (the eager-
+      # resolution constraint documented in the header).
+      #
+      # Note: no ANSIBLE_ROLES_PATH is exported here. During lint, roles
+      # resolution must be governed by the caller's root ansible.cfg - the
+      # consumers' nested-slice lint shim (`roles_path =
+      # hyper-v/ubuntu/Ansible/roles`) resolves their short-name roles, and
+      # an env override would clobber it (see the header). Pushing the
+      # substrate roles/ onto the path is a molecule-only need, so that
+      # export lives in feature 21's molecule job, not this lint job.
       - name: Resolve substrate wiring
         id: substrate
         shell: bash
         run: |
           if [[ "${{ github.repository }}" == 'Klark-Morrigan/Common-Ansible' ]]; then
             echo "root=." >> "${GITHUB_OUTPUT}"
-            echo "ANSIBLE_ROLES_PATH=${GITHUB_WORKSPACE}/roles" >> "${GITHUB_ENV}"
           else
             echo "root=.common-ansible" >> "${GITHUB_OUTPUT}"
-            echo "ANSIBLE_ROLES_PATH=${GITHUB_WORKSPACE}/roles:${GITHUB_WORKSPACE}/.common-ansible/roles" >> "${GITHUB_ENV}"
           fi
+
+      # --- github-hosted provisioning (both repo branches) ---------------
+      # A bare image carries no controller, so install the hash-locked
+      # closure into a setup-python interpreter. Gated on
+      # runner.environment: on a self-hosted runner the controller is baked
+      # in and these three steps are skipped in favour of the reuse steps
+      # below. These are plain run/uses steps (no eager-`./` resolution), so
+      # the computed substrate root keeps them DRY across self and consumer -
+      # no per-repository split is needed here.
 
       # Pin the interpreter minor (3.12) - the controller runs on Ubuntu
       # 24.04's python3.12, so CI installs the toolchain against the same
       # minor to complete the hermeticity boundary the lockfile starts.
-      - name: Set up Python
+      - name: Set up Python (github-hosted)
+        if: runner.environment == 'github-hosted'
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.12'
@@ -152,7 +218,8 @@ jobs:
       # setup-python's interpreter already puts its scripts dir on PATH,
       # but we append it explicitly so the `ansible-lint` the composite
       # calls from PATH is unambiguously this venv's binary.
-      - name: Install pinned Ansible controller toolchain
+      - name: Install pinned Ansible controller toolchain (github-hosted)
+        if: runner.environment == 'github-hosted'
         shell: bash
         run: |
           python -m pip install --upgrade pip
@@ -163,10 +230,54 @@ jobs:
       # ~/.ansible/collections, which ansible-lint auto-discovers). Parity
       # with the local controller bootstrap, and required by feature 21's
       # molecule that reuses this wiring.
-      - name: Install pinned Galaxy collections
+      - name: Install pinned Galaxy collections (github-hosted)
+        if: runner.environment == 'github-hosted'
         shell: bash
         run: |
           ansible-galaxy collection install -r "${{ steps.substrate.outputs.root }}/requirements.yml"
+
+      # --- self-hosted provisioning (reuse the pre-baked controller) -----
+      # A self-hosted runner image is expected to carry the controller venv
+      # pre-baked (how the pool is provisioned is the runner operator's
+      # concern, external to this workflow), so a self-hosted run reuses it
+      # rather than installing a second, divergent copy. Two repo branches:
+      # a consumer reaches the shared controller through the substrate SSOT,
+      # while Common-Ansible's own runs assert their repo `.venv`. Each puts
+      # the controller `.venv/bin` on $GITHUB_PATH so the composite resolves
+      # the same `ansible-lint` the hosted path would.
+
+      # Consumer self-hosted: exec the substrate's SSOT consumer bootstrap
+      # from the staged copy. It locates-or-ensures the shared controller
+      # venv and is a no-op when the runner already carries it. The
+      # slice-root arg is used only for the provider's roles-path summary
+      # (see the ansible-slice-root input); the lint pass targets the repo
+      # root regardless. COMMON_ANSIBLE_ROOT lets the baked runner point the
+      # provider at the pre-installed substrate; absent that, it defaults to
+      # the staged .common-ansible checkout.
+      - name: Reuse baked controller (self-hosted, consumer)
+        if: runner.environment == 'self-hosted' && github.repository != 'Klark-Morrigan/Common-Ansible'
+        shell: bash
+        run: |
+          bash "${GITHUB_WORKSPACE}/.common-ansible/ops/bootstrap-controller-consumer.sh" \
+            "${{ inputs.ansible-slice-root }}"
+          controller_root="${COMMON_ANSIBLE_ROOT:-${GITHUB_WORKSPACE}/.common-ansible}"
+          echo "${controller_root}/.venv/bin" >> "${GITHUB_PATH}"
+
+      # Common-Ansible self-hosted: the consumer provider is the consumer
+      # entry point, so this repo's own self-hosted runs assert the repo
+      # `.venv` its bootstrap-controller built is present, then reuse it. A
+      # missing venv is a runner-provisioning fault, surfaced loudly here
+      # rather than as an opaque `ansible-lint: not found` in the composite.
+      - name: Reuse baked controller (self-hosted, self)
+        if: runner.environment == 'self-hosted' && github.repository == 'Klark-Morrigan/Common-Ansible'
+        shell: bash
+        run: |
+          venv_bin="${GITHUB_WORKSPACE}/.venv/bin"
+          if [[ ! -x "${venv_bin}/ansible-lint" ]]; then
+            echo "::error::Controller .venv missing at ${venv_bin}; the self-hosted runner must bake it via ops/bootstrap-controller.ps1." >&2
+            exit 1
+          fi
+          echo "${venv_bin}" >> "${GITHUB_PATH}"
 
       # Run the ansible-lint composite. Self branch points at this repo's
       # own action; consumer branch at the staged copy under

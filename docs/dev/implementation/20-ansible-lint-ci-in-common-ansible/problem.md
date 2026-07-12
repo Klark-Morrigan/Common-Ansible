@@ -12,6 +12,7 @@
   - [Off-the-shelf survey - the placement](#off-the-shelf-survey---the-placement)
   - [Decision: execution model - controller venv](#decision-execution-model---controller-venv)
     - [The hermeticity trade-off and how it is closed](#the-hermeticity-trade-off-and-how-it-is-closed)
+    - [Runner-environment gating and the controller provider](#runner-environment-gating-and-the-controller-provider)
   - [Decision: scope - full migration](#decision-scope---full-migration)
   - [Chosen direction](#chosen-direction)
 - [Relationship to feature 21](#relationship-to-feature-21)
@@ -201,6 +202,32 @@ pinned ansible-lint but pulled ansible-core *transitively at build time*,
 so it linted against a floating ansible-core that could differ from the
 repo's pinned `ansible-core==2.18.1` and the collections molecule and
 production actually use. The venv lints against the one real toolchain.
+
+#### Runner-environment gating and the controller provider
+
+The venv must be *provisioned*, and the estate already has one pattern for
+that: Common-DotNet's `ci-dotnet.yml` installs its toolchain through a
+`provision-dotnet-toolchain` composite **gated on `runner.environment`** -
+run it on `github-hosted` runners (which lack the toolchain), skip it on
+`self-hosted` runners, "where Infrastructure-GitHubRunners bakes the
+toolchain in". ci-ansible follows the same rule so the two domains
+provision consistently:
+
+- **`github-hosted`**: install the hash-locked closure into a
+  `setup-python` interpreter (the inline path). This is the only path that
+  needs a fresh install.
+- **`self-hosted`**: reuse the already-provisioned controller rather than
+  installing a second copy. The reuse goes through the estate's controller
+  SSOT, `ops/bootstrap-controller-consumer.sh` (venv + ansible-core +
+  ansible-lint + collections), which locates-or-ensures the shared
+  controller and is a no-op when the runner already has it baked in. That
+  script reaches the substrate bootstrap via `pwsh.exe`/WSL - a Windows
+  entry point - which is exactly why it belongs on the self-hosted path
+  and not on a bare ubuntu-hosted image.
+
+Gating is on `runner.environment`, not a runner label, for the reason
+ci-dotnet documents: a self-hosted pool is targeted by an arbitrary custom
+label that no inspection could classify as hosted-or-not.
 
 Consequences of the venv choice:
 
