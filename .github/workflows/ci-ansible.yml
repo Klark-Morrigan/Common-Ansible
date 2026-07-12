@@ -43,11 +43,17 @@
 # (`ci-ansible / ansible`) instead of several, and an implicit
 # `success()` guard on each step so a failure short-circuits the rest.
 #
-# Shared sibling-checkout + roles-path wiring. Steps 2-6 (stage the
-# substrate, install the toolchain, install collections, export
-# ANSIBLE_ROLES_PATH) are the reusable Ansible-run scaffold that feature
-# 21's molecule workflow reuses - this workflow owns that wiring so the
-# two gates resolve short-name roles and the pinned toolchain identically.
+# Shared sibling-checkout + toolchain wiring. Staging the substrate,
+# installing the toolchain, and installing collections are the reusable
+# Ansible-run scaffold that feature 21's molecule workflow reuses - this
+# workflow owns that wiring so the two gates resolve the pinned toolchain
+# identically. The lint pass deliberately does NOT export an
+# ANSIBLE_ROLES_PATH: that env var overrides a caller's root ansible.cfg
+# `roles_path`, which would clobber the consumers' nested-slice lint shim
+# (`roles_path = hyper-v/ubuntu/Ansible/roles`) and lose the nested roles.
+# Roles resolution during lint is governed by each caller's root cfg
+# instead; resolving substrate roles onto the path is a molecule need, so
+# that export belongs to feature 21's molecule job, not here.
 #
 # Self vs consumer. When this workflow runs on its own PRs
 # (`github.repository == Klark-Morrigan/Common-Ansible`) it uses its own
@@ -55,8 +61,8 @@
 # calls it, the consumer's workspace has none of those, so the job first
 # sparse-checks-out Common-Ansible at `master` into `.common-ansible/` and
 # every substrate reference points there. The consumer's own repo remains
-# the lint target (`--project-dir`), with its `roles/` leading the
-# search path and the substrate `roles/` appended for short-name reuse.
+# the lint target (`--project-dir` = repo root); short-name roles resolve
+# through its root ansible.cfg (the lint shim), not an env override.
 #
 # The ansible-lint composite is referenced by a local `./` path, never a
 # fully-qualified `@master` ref, for the reason ci-yaml.yml documents:
@@ -166,24 +172,26 @@ jobs:
           sparse-checkout-cone-mode: false
 
       # Resolve the substrate root once. `.` on self runs, `.common-ansible`
-      # on consumer runs. The pip/galaxy/roles-path steps below are plain
-      # `run:` blocks (not `uses:`), so a single computed path keeps them
-      # DRY - only the composite step needs the if-guarded self/consumer
-      # pair (the eager-resolution constraint documented in the header).
-      # ANSIBLE_ROLES_PATH mirrors ops/_ansible-env.sh: the caller's own
-      # roles/ leads so its roles resolve by short name, with the substrate
-      # roles/ appended so reusable substrate roles still resolve. On self
-      # runs the two collapse to the single workspace roles/.
+      # on consumer runs. The pip/galaxy steps below are plain `run:` blocks
+      # (not `uses:`), so a single computed path keeps them DRY - only the
+      # composite step needs the if-guarded self/consumer pair (the eager-
+      # resolution constraint documented in the header).
+      #
+      # Note: no ANSIBLE_ROLES_PATH is exported here. During lint, roles
+      # resolution must be governed by the caller's root ansible.cfg - the
+      # consumers' nested-slice lint shim (`roles_path =
+      # hyper-v/ubuntu/Ansible/roles`) resolves their short-name roles, and
+      # an env override would clobber it (see the header). Pushing the
+      # substrate roles/ onto the path is a molecule-only need, so that
+      # export lives in feature 21's molecule job, not this lint job.
       - name: Resolve substrate wiring
         id: substrate
         shell: bash
         run: |
           if [[ "${{ github.repository }}" == 'Klark-Morrigan/Common-Ansible' ]]; then
             echo "root=." >> "${GITHUB_OUTPUT}"
-            echo "ANSIBLE_ROLES_PATH=${GITHUB_WORKSPACE}/roles" >> "${GITHUB_ENV}"
           else
             echo "root=.common-ansible" >> "${GITHUB_OUTPUT}"
-            echo "ANSIBLE_ROLES_PATH=${GITHUB_WORKSPACE}/roles:${GITHUB_WORKSPACE}/.common-ansible/roles" >> "${GITHUB_ENV}"
           fi
 
       # --- github-hosted provisioning (both repo branches) ---------------

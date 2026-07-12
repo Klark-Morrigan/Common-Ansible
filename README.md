@@ -657,14 +657,24 @@ jobs:
 The job checks out the caller, then - only when the caller is not
 Common-Ansible itself - sparse-checks-out this repo at `master` into
 `.common-ansible/` (the toolchain lockfile, the bundled config, and the
-substrate `roles/`). It sets `ANSIBLE_ROLES_PATH` to the caller's own
-`roles/` ahead of the substrate `roles/`, so a consumer's roles resolve by
-short name while reusing substrate roles. The caller's repo stays the lint
-target (`--project-dir`); the sibling checkout only supplies the toolchain
-and config. On self runs the branch collapses to this repo's own
-workspace. This sibling-checkout + roles-path scaffold is shared wiring
-that [feature 21](docs/dev/implementation/21-molecule-ci-in-common-ansible/problem.md)'s
-molecule gate reuses.
+substrate `roles/`). The caller's repo stays the lint target
+(`--project-dir` = repo root); the sibling checkout only supplies the
+toolchain and config. On self runs the branch collapses to this repo's own
+workspace.
+
+The lint pass deliberately does **not** export an `ANSIBLE_ROLES_PATH`.
+That env var overrides a caller's root `ansible.cfg` `roles_path`, and the
+consumers keep their Ansible content in a nested `hyper-v/ubuntu/Ansible/`
+slice resolved by a root-cfg **lint shim**
+(`roles_path = hyper-v/ubuntu/Ansible/roles`); an env override would
+clobber the shim and the nested roles would stop resolving. Roles
+resolution during lint is therefore governed by each caller's root cfg -
+this repo's real cfg on self runs, the consumers' shim on consumer runs.
+Pushing the substrate `roles/` onto the path is a molecule-only need
+(converge must load the substrate roles), so that export belongs to
+[feature 21](docs/dev/implementation/21-molecule-ci-in-common-ansible/problem.md)'s
+molecule gate, not this lint job. The sibling-checkout scaffold itself is
+shared wiring that the molecule gate reuses.
 
 Runner selection, highest precedence first: the `runner` input (a per-call
 or `workflow_dispatch` override), else the caller's `CI_ANSIBLE_RUNNER`
