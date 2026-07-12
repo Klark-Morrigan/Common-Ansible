@@ -1,0 +1,29 @@
+# Bundled default ansible-lint config for the ansible-lint composite
+# action. Applied when the consumer repo has no `.ansible-lint` /
+# `.ansible-lint.yml` / `.ansible-lint.yaml` at its root. Single
+# source of truth for the strict-by-default bar every consumer
+# inherits.
+#
+# `production` is ansible-lint's strictest built-in profile - it
+# enables every rule short of the experimental tier. Consumers that
+# need to relax the bar drop their own .ansible-lint at the repo
+# root; that file wins over this one (the helper resolves consumer
+# config first).
+---
+profile: production
+
+# Non-Ansible YAML that still lives in every consumer repo. The
+# GitHub Actions surface (`.github/workflows/`, `.github/actions/`)
+# is already covered by actionlint and action-validator in the same
+# reusable workflow, so ansible-lint must not double-flag it on
+# rules it inherits from yamllint (brackets, line-length, comments,
+# ...). Excluding `.github/` wholesale also covers CODEOWNERS,
+# dependabot.yml, and other GitHub-only config files.
+#
+# `.common-ansible/` is the sibling-checkout staging dir created by
+# ci-ansible.yml's conditional sparse checkout (this action only runs
+# in that workflow's job). It holds a copy of Common-Ansible's action
+# tree and substrate roles and is not the consumer's concern; skip.
+exclude_paths:
+  - .github/
+  - .common-ansible/
