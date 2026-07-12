@@ -16,6 +16,8 @@ migration), or the survey.
   - [Step 1.4 - The `ci-ansible.yml` reusable workflow](#step-14---the-ci-ansibleyml-reusable-workflow)
   - [Step 1.5 - Local pre-push parity](#step-15---local-pre-push-parity)
   - [Step 1.6 - README for the gate](#step-16---readme-for-the-gate)
+  - [Step 1.7 - Gate provisioning on `runner.environment`; reuse the controller provider](#step-17---gate-provisioning-on-runnerenvironment-reuse-the-controller-provider)
+  - [Step 1.8 - Preserve the consumer nested-slice lint shim](#step-18---preserve-the-consumer-nested-slice-lint-shim)
 - [Section 2 - Consumers adopt `ci-ansible.yml`](#section-2---consumers-adopt-ci-ansibleyml)
   - [Step 2.1 - Infrastructure-Vm-Users](#step-21---infrastructure-vm-users)
   - [Step 2.2 - Infrastructure-GitHubRunners](#step-22---infrastructure-githubrunners)
@@ -79,6 +81,14 @@ Coverage state after each section (X = ansible-lint runs against it):
 
 No cell is ever empty for an Ansible repo - the transition is always
 additive-then-subtractive.
+
+One extra gate on the S1 -> S2 edge: Steps 1.7 and 1.8 must be on
+Common-Ansible `master` before Section 2. The consumers (Vm-Users,
+GitHubRunners) keep their Ansible content in a nested
+`hyper-v/ubuntu/Ansible/` slice, so until ci-ansible reuses the
+self-hosted controller (1.7) and stops overriding the consumers' root
+`ansible.cfg` lint shim (1.8), a consumer's `ci-ansible` call cannot go
+green.
 
 ## Section 1 - Common-Ansible: stand up the venv ansible-lint gate
 
@@ -321,6 +331,131 @@ link-check the new anchors.
 flowchart LR
   README["Common-Ansible README"] --> SEC["Ansible CI section:<br/>ci-ansible, venv model,<br/>lockfile, config, retry note"]
   SEC -.->|links| PROB["problem.md<br/>hermeticity subsection"]
+```
+
+### Step 1.7 - Gate provisioning on `runner.environment`; reuse the controller provider
+
+**Why.** The toolchain the gate needs must be *provisioned*, and the
+estate has one pattern for that: Common-DotNet's `ci-dotnet.yml`
+provisions through a composite **gated on `runner.environment`** - install
+on `github-hosted` (bare image), skip on `self-hosted` because
+Infrastructure-GitHubRunners bakes the toolchain in. ci-ansible must
+provision the same way, so a self-hosted run reuses the one controller the
+estate single-sources via `ops/bootstrap-controller-consumer.sh` instead
+of installing a second, divergent copy.
+
+**What.** The `ansible` job's toolchain provisioning branches on
+`runner.environment`, retaining the self/consumer repository split (four
+combinations, matching ci-dotnet):
+
+- **`github-hosted` (both repo branches):** install the hash-locked
+  closure into a `setup-python` interpreter - `setup-python` +
+  `pip install --require-hashes` + `ansible-galaxy` (the provisioning
+  [Step 1.4](#step-14---the-ci-ansibleyml-reusable-workflow) sets up). The
+  controller provider does not run here: it reaches the substrate
+  bootstrap through `pwsh.exe`/WSL (a Windows entry point) absent on a
+  bare ubuntu image, so the inline hash-locked install is the hosted-path
+  provisioner and the hermeticity boundary.
+- **`self-hosted` (consumer):** reuse the baked controller via
+  `ops/bootstrap-controller-consumer.sh <consumer-ansible-slice-root>`
+  from the staged substrate (`.common-ansible/ops/...`), which
+  locates-or-ensures the shared controller venv and is a no-op when the
+  runner already carries it. No `setup-python` / `pip` / `galaxy` on this
+  path.
+- **`self-hosted` (self = Common-Ansible):** the provider is the
+  consumer-side entry, so Common-Ansible's own self-hosted runs assert the
+  repo's `.venv` is present (its own `bootstrap-controller` owns building
+  it) and reuse it.
+- Whichever branch runs puts the provisioned toolchain on `$GITHUB_PATH` -
+  the `setup-python` scripts dir (hosted) or the controller `.venv/bin`
+  (self-hosted) - so the ansible-lint composite resolves `ansible-lint`
+  from the single provisioned toolchain.
+- The gate keys on `runner.environment`, **not** a runner label (a
+  self-hosted pool carries an arbitrary custom label no inspection can
+  classify), per the rationale ci-dotnet documents.
+
+**Tests.**
+
+- `actionlint` / `action-validator` on the workflow.
+- Hosted path: the Common-Ansible self PR on `ubuntu-latest` lints green.
+- Self-hosted path: a `workflow_dispatch` with
+  `runner: ["self-hosted", ...]` (or the `CI_ANSIBLE_RUNNER` variable set
+  on a consumer) confirms the provider-reuse branch runs, `ansible-lint`
+  resolves from the baked controller, and no `setup-python`/`pip` step
+  executes.
+
+The `<consumer-ansible-slice-root>` handed to the provider is the nested
+slice, not the repo root (see [Step 1.8](#step-18---preserve-the-consumer-nested-slice-lint-shim)
+for how the consumers' nested layout is resolved for the lint pass).
+
+```mermaid
+flowchart TD
+  JOB["ci-ansible : job 'ansible'"] --> ENVQ{"runner.environment?"}
+  ENVQ -->|github-hosted| HOST["setup-python +<br/>pip --require-hashes +<br/>galaxy (Step 1.4)"]
+  ENVQ -->|self-hosted| REPOQ{"repo ==<br/>Common-Ansible?"}
+  REPOQ -->|yes self| SELFV["assert own .venv,<br/>reuse"]
+  REPOQ -->|no consumer| PROV["bootstrap-controller-consumer.sh<br/>&lt;slice-root&gt; (reuse baked controller)"]
+  HOST --> PATH["toolchain bin -> GITHUB_PATH"]
+  SELFV --> PATH
+  PROV --> PATH
+  PATH --> LINT["ansible-lint composite"]
+  PROV -.->|slice-root, see Step 1.8| SLICE["nested slice:<br/>hyper-v/ubuntu/Ansible"]
+```
+
+### Step 1.8 - Preserve the consumer nested-slice lint shim
+
+**Why.** The consumers keep their Ansible content in a nested
+`hyper-v/ubuntu/Ansible/` slice and already resolve it for linting with a
+root `ansible.cfg` **lint-support shim** (`roles_path =
+hyper-v/ubuntu/Ansible/roles`). That shim is built against a fixed
+contract: ansible-lint activates on the root `ansible.cfg`, runs with
+`--project-dir` = repo root, and resolves short-name `include_role`
+through the cfg's `roles_path`. The gate must honour that contract.
+Exporting `ANSIBLE_ROLES_PATH` as an environment variable does not: the
+env var overrides the cfg `roles_path`, so a value of
+`${GITHUB_WORKSPACE}/roles` - a path these nested consumers do not have -
+clobbers the shim and the nested roles stop resolving. The prior Common-
+Automation gate linted these consumers green precisely because it set no
+such env var and let the shim govern.
+
+**What.**
+
+- The ansible-lint pass does not export an `ANSIBLE_ROLES_PATH` that
+  overrides a caller's root `ansible.cfg`. Each repo's root cfg governs
+  roles resolution during lint: Common-Ansible's real cfg
+  (`roles_path = roles`, root-level content) on self runs; the consumers'
+  lint-support shim (`roles_path = <nested>/roles`) on consumer runs. The
+  composite already lints with `--project-dir` = repo root and
+  auto-activates on the root cfg, so no per-slice path plumbing is needed.
+- The substrate sibling checkout stays - the composite reads the bundled
+  config and the pinned toolchain from it - but the roles-path export is
+  not part of the lint job. Resolving substrate roles onto the path is a
+  molecule need (converge must load the substrate roles), so it belongs to
+  feature 21's molecule job: the sibling checkout is shared between the two
+  gates, the roles-path export is molecule-scoped.
+- Relying on the root cfg is sound in CI: a GitHub checkout is ordinary
+  ext4, not the `/mnt/c` drvfs mount that makes Ansible ignore a
+  world-writable `ansible.cfg`. The env-var mirror `ops/_ansible-env.sh`
+  needs locally is a drvfs artefact that does not apply on a runner.
+
+**Tests.**
+
+- A consumer dispatch (Vm-Users or GitHubRunners) lints green, the root
+  shim resolving the nested `include_role` short names.
+- Negative check: setting `ANSIBLE_ROLES_PATH=${GITHUB_WORKSPACE}/roles`
+  reproduces the load-failure, proving the shim (not an env override)
+  carries these consumers.
+- The Common-Ansible self run stays green (its root cfg is unaffected).
+
+```mermaid
+flowchart TD
+  LINT["ansible-lint --project-dir = repo root"] --> REPOQ{"caller"}
+  REPOQ -->|self: Common-Ansible| RC["root ansible.cfg (real)<br/>roles_path = roles"]
+  REPOQ -->|consumer| SH["root ansible.cfg (lint shim)<br/>roles_path = hyper-v/ubuntu/Ansible/roles"]
+  RC --> OK["short-name roles resolve"]
+  SH --> OK
+  ENV["ANSIBLE_ROLES_PATH env override"]:::bad -.->|"clobbers cfg -><br/>nested roles lost"| SH
+  classDef bad stroke:#c33,stroke-dasharray:4 4,color:#c33
 ```
 
 ## Section 2 - Consumers adopt `ci-ansible.yml`
