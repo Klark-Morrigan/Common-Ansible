@@ -1,0 +1,19 @@
+# Source requirements for the Ansible controller venv (human-edited).
+#
+# This is the pip-compile *source*: only the top-level packages we
+# deliberately depend on live here. The fully-pinned, hash-annotated
+# lockfile it produces is requirements.txt - regenerate it after any
+# edit here with:
+#
+#   pip-compile --generate-hashes requirements.in
+#
+# Pin ansible-core (not the full `ansible` package) - we install Galaxy
+# collections explicitly via requirements.yml, so the batteries-included
+# meta-package would only add untracked surface area.
+ansible-core==2.18.1
+
+# ansible-lint is the Ansible-domain CI gate, run from this venv rather
+# than a Docker image (see docs feature 20). Pinned here so the version
+# is single-sourced in the controller toolchain; 26.4.0 requires
+# ansible-core>=2.16.14, so it resolves against the 2.18.1 pin above.
+ansible-lint==26.4.0

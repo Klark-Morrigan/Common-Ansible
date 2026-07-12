@@ -126,12 +126,17 @@ if [[ ! -x "${venv_dir}/bin/pip" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Pip dependencies. --upgrade keeps already-installed packages on
-#    their pins (no-op when current) while still picking up changes
-#    after a requirements.txt bump.
+# 3. Pip dependencies. requirements.txt is a pip-compile lockfile: the
+#    full transitive closure, each line pinned and --hash-annotated
+#    (regenerate it from requirements.in - see that file's header).
+#    --require-hashes turns the lock into an enforced contract: a drifted,
+#    unpinned, or unhashed line aborts the install loudly instead of
+#    silently floating, giving the venv the byte-for-byte reproducibility
+#    the Docker image it replaced used to provide (see docs feature 20's
+#    hermeticity note).
 # ---------------------------------------------------------------------------
 "${venv_dir}/bin/pip" install --upgrade pip >/dev/null
-"${venv_dir}/bin/pip" install -r requirements.txt
+"${venv_dir}/bin/pip" install --require-hashes -r requirements.txt
 
 # ---------------------------------------------------------------------------
 # 4. Galaxy collections. --force-with-deps ensures the pinned versions
@@ -168,8 +173,15 @@ echo "Controller bootstrap complete:"
 python_version="$("${venv_dir}/bin/python" --version)" || python_version="unknown"
 ansible_version="$("${venv_dir}/bin/ansible" --version)" || ansible_version="unknown"
 ansible_version="${ansible_version%%$'\n'*}"
+# ansible-lint is now a co-equal pinned line in requirements.txt (it is
+# the venv-based CI/local gate - docs feature 20), so confirm it landed
+# alongside ansible rather than leaving it invisible in the summary. Its
+# first line already carries the version, so no head/parameter trim.
+ansible_lint_version="$("${venv_dir}/bin/ansible-lint" --version)" || ansible_lint_version="unknown"
+ansible_lint_version="${ansible_lint_version%%$'\n'*}"
 jq_version="$(jq --version)" || jq_version="unknown"
-echo "  Python : ${python_version}"
-echo "  Ansible: ${ansible_version}"
-echo "  pwsh.exe: reachable"
-echo "  jq     : ${jq_version}"
+echo "  Python      : ${python_version}"
+echo "  Ansible     : ${ansible_version}"
+echo "  ansible-lint: ${ansible_lint_version}"
+echo "  pwsh.exe    : reachable"
+echo "  jq          : ${jq_version}"

@@ -1,0 +1,181 @@
+# Ansible-domain CI gate: runs ansible-lint against the caller repo's
+# Ansible content (playbooks, roles, ansible.cfg). This is the reusable
+# workflow the whole `Common-Ansible` feature 20 exists to create - the
+# ansible-lint gate that used to live in Common-Automation's universal
+# `ci-yaml.yml` now lives here, next to the controller venv that pins its
+# toolchain.
+#
+# Execution model - a controller venv, not a Docker image. The old
+# Common-Automation gate built a Docker image per run; this one installs
+# the exact hash-locked `ansible-core` + `ansible-lint` closure from
+# `requirements.txt` into a `setup-python` interpreter and runs
+# `ansible-lint` straight from PATH. The lockfile is the reproducibility
+# boundary the image used to provide (see feature 20's problem.md
+# hermeticity note); the interpreter minor is pinned here to complete it.
+#
+# One `ansible` job runs as sequential steps sharing a single checkout,
+# for the same reasons ci-yaml.yml gives: one PR status check
+# (`ci-ansible / ansible`) instead of several, and an implicit
+# `success()` guard on each step so a failure short-circuits the rest.
+#
+# Shared sibling-checkout + roles-path wiring. Steps 2-6 (stage the
+# substrate, install the toolchain, install collections, export
+# ANSIBLE_ROLES_PATH) are the reusable Ansible-run scaffold that feature
+# 21's molecule workflow reuses - this workflow owns that wiring so the
+# two gates resolve short-name roles and the pinned toolchain identically.
+#
+# Self vs consumer. When this workflow runs on its own PRs
+# (`github.repository == Klark-Morrigan/Common-Ansible`) it uses its own
+# workspace: its requirements, its composite, its roles/. When a consumer
+# calls it, the consumer's workspace has none of those, so the job first
+# sparse-checks-out Common-Ansible at `master` into `.common-ansible/` and
+# every substrate reference points there. The consumer's own repo remains
+# the lint target (`--project-dir`), with its `roles/` leading the
+# search path and the substrate `roles/` appended for short-name reuse.
+#
+# The ansible-lint composite is referenced by a local `./` path, never a
+# fully-qualified `@master` ref, for the reason ci-yaml.yml documents:
+# GitHub eagerly resolves every registry-form `uses:` at job-prep time,
+# before step-level `if:` guards run, so a PR that introduces a new
+# composite would fail prep. Local refs resolve at step-execution time
+# after checkout, side-stepping that. Hence the if-guarded self/consumer
+# pair on the composite step.
+#
+# Reusable: consumers call this workflow with no inputs.
+#
+#   jobs:
+#     ansible:
+#       uses: Klark-Morrigan/Common-Ansible/.github/workflows/ci-ansible.yml@master
+#
+# Runner selection, highest precedence first: the `runner` input (a
+# one-off / per-call override), else the `CI_ANSIBLE_RUNNER` repo/org
+# variable (read from the CALLER's repository - `vars` in a reusable
+# workflow resolves to the caller, not this repo), else the ubuntu-latest
+# hosted default. Values are JSON label arrays, e.g. `["ubuntu-latest"]`
+# or `["self-hosted","linux"]`.
+
+name: ci-ansible
+
+on:
+  pull_request:
+  # Manual runs let a maintainer override the runner for a one-off; this
+  # is the only override path for this repo's own runs, since
+  # pull_request cannot carry inputs.
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: >-
+          Optional runs-on override for this run, as a JSON label array
+          (e.g. `["ubuntu-latest"]` or `["self-hosted","linux"]`). Takes
+          precedence over the CI_ANSIBLE_RUNNER variable.
+        required: false
+        type: string
+        default: ''
+  workflow_call:
+    inputs:
+      runner:
+        description: >-
+          Optional runs-on override, as a JSON label array (e.g.
+          `["ubuntu-latest"]`). Takes precedence over the
+          CI_ANSIBLE_RUNNER variable; consumers pass it in `with:` to
+          override per-call. Leave empty to use the variable.
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  ansible:
+    # Runner selection, highest precedence first: the `runner` input (a
+    # one-off override), else the `CI_ANSIBLE_RUNNER` variable (read from
+    # the caller's repository), else the ubuntu-latest hosted default.
+    # Each value is a JSON label array, e.g. ["ubuntu-latest"] or
+    # ["self-hosted","linux"].
+    runs-on: ${{ inputs.runner != '' && fromJSON(inputs.runner)
+      || vars.CI_ANSIBLE_RUNNER != '' && fromJSON(vars.CI_ANSIBLE_RUNNER)
+      || fromJSON('["ubuntu-latest"]') }}
+    steps:
+      - name: Check out caller repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      # Consumers do not have Common-Ansible's toolchain lockfile, bundled
+      # config, or substrate roles/ in their workspace; stage them once at
+      # master into .common-ansible/ for every substrate reference below.
+      # Cone mode off so the individual file paths (requirements.*,
+      # ansible.cfg) are honoured alongside the directory paths.
+      - name: Stage Common-Ansible substrate
+        if: github.repository != 'Klark-Morrigan/Common-Ansible'
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          repository: Klark-Morrigan/Common-Ansible
+          ref: master
+          path: .common-ansible
+          sparse-checkout: |
+            .github/actions
+            requirements.txt
+            requirements.yml
+            ansible.cfg
+            roles
+          sparse-checkout-cone-mode: false
+
+      # Resolve the substrate root once. `.` on self runs, `.common-ansible`
+      # on consumer runs. The pip/galaxy/roles-path steps below are plain
+      # `run:` blocks (not `uses:`), so a single computed path keeps them
+      # DRY - only the composite step needs the if-guarded self/consumer
+      # pair (the eager-resolution constraint documented in the header).
+      # ANSIBLE_ROLES_PATH mirrors ops/_ansible-env.sh: the caller's own
+      # roles/ leads so its roles resolve by short name, with the substrate
+      # roles/ appended so reusable substrate roles still resolve. On self
+      # runs the two collapse to the single workspace roles/.
+      - name: Resolve substrate wiring
+        id: substrate
+        shell: bash
+        run: |
+          if [[ "${{ github.repository }}" == 'Klark-Morrigan/Common-Ansible' ]]; then
+            echo "root=." >> "${GITHUB_OUTPUT}"
+            echo "ANSIBLE_ROLES_PATH=${GITHUB_WORKSPACE}/roles" >> "${GITHUB_ENV}"
+          else
+            echo "root=.common-ansible" >> "${GITHUB_OUTPUT}"
+            echo "ANSIBLE_ROLES_PATH=${GITHUB_WORKSPACE}/roles:${GITHUB_WORKSPACE}/.common-ansible/roles" >> "${GITHUB_ENV}"
+          fi
+
+      # Pin the interpreter minor (3.12) - the controller runs on Ubuntu
+      # 24.04's python3.12, so CI installs the toolchain against the same
+      # minor to complete the hermeticity boundary the lockfile starts.
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+
+      # Install the exact hash-locked toolchain closure. --require-hashes
+      # turns the lockfile into an enforced contract: a drifted, unpinned,
+      # or unhashed line aborts the install rather than silently floating.
+      # setup-python's interpreter already puts its scripts dir on PATH,
+      # but we append it explicitly so the `ansible-lint` the composite
+      # calls from PATH is unambiguously this venv's binary.
+      - name: Install pinned Ansible controller toolchain
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes -r "${{ steps.substrate.outputs.root }}/requirements.txt"
+          python -c 'import sysconfig; print(sysconfig.get_path("scripts"))' >> "${GITHUB_PATH}"
+
+      # Install the Galaxy collections pinned in requirements.yml (default
+      # ~/.ansible/collections, which ansible-lint auto-discovers). Parity
+      # with the local controller bootstrap, and required by feature 21's
+      # molecule that reuses this wiring.
+      - name: Install pinned Galaxy collections
+        shell: bash
+        run: |
+          ansible-galaxy collection install -r "${{ steps.substrate.outputs.root }}/requirements.yml"
+
+      # Run the ansible-lint composite. Self branch points at this repo's
+      # own action; consumer branch at the staged copy under
+      # .common-ansible/. Each is if-guarded on github.repository for the
+      # eager-`./`-resolution reason in the header. The composite lints the
+      # caller repo and auto-skips when it has no Ansible content.
+      - name: ansible-lint (self)
+        if: github.repository == 'Klark-Morrigan/Common-Ansible'
+        uses: ./.github/actions/ansible-lint
+      - name: ansible-lint (consumer)
+        if: github.repository != 'Klark-Morrigan/Common-Ansible'
+        uses: ./.common-ansible/.github/actions/ansible-lint
