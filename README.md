@@ -27,6 +27,7 @@ was extended by the feature step that earned it.
   - [Section-2 apt toolchain pattern (toolchain_apt)](#section-2-apt-toolchain-pattern-toolchain_apt)
   - [Section-3 Docker daemon (docker)](#section-3-docker-daemon-docker)
 - [Tests and lint](#tests-and-lint)
+  - [Ansible lint gate (ci-ansible.yml)](#ansible-lint-gate-ci-ansibleyml)
 - [Consuming the substrate](#consuming-the-substrate)
 - [Feature folders](#feature-folders)
 
@@ -576,6 +577,13 @@ CI is wired to three reusable workflows; nothing is copied per-repo:
 - [`.github/workflows/ci-yaml.yml`](.github/workflows/ci-yaml.yml)
   -> `Common-Automation/.github/workflows/ci-yaml.yml@master` (yamllint,
   actionlint, action-validator, ansible-lint).
+- [`.github/workflows/ci-ansible.yml`](.github/workflows/ci-ansible.yml)
+  - the Ansible-domain gate. Unlike the three above it is **defined in
+  this repo**, not a thin caller of a sibling: it self-triggers on this
+  repo's own PRs and is the reusable workflow consumers call at `@master`.
+  See [Ansible lint gate](#ansible-lint-gate-ci-ansibleyml) below. (Until
+  Common-Automation drops its own ansible-lint step, `ci-yaml.yml` above
+  still lints this repo too, so Common-Ansible is briefly double-covered.)
 
 This repo carries **no E2E gate of its own**. As the consumed substrate
 (dispatch bridge + reusable roles), its real-VM behaviour is exercised
@@ -599,8 +607,18 @@ lands in one place):
   equivalent of `ci-yaml.yml` + `ci-bash.yml`.
 - [`scripts/run-lint-yaml-and-bash.sh`](scripts/run-lint-yaml-and-bash.sh)
   (with its [`.bat`](scripts/run-lint-yaml-and-bash.bat) launcher) ->
-  delegates to Common-Automation to run the lint half only (shellcheck,
-  actionlint, action-validator, yamllint, ansible-lint); no bats.
+  delegates to Common-Automation for the cross-cutting linters (shellcheck,
+  check-sh-executable, actionlint, action-validator, yamllint), then runs
+  this repo's own venv-based `ansible-lint` via `run-lint-ansible.sh`
+  (below); no bats. The Ansible step is owned here, not delegated - the
+  local twin of the [ci-ansible gate](#ansible-lint-gate-ci-ansibleyml).
+- [`scripts/run-lint-ansible.sh`](scripts/run-lint-ansible.sh) -> lints
+  this repo's `roles/` / `playbooks/` / `ansible.cfg` through the
+  controller venv, invoking the **same helper and config** the CI composite
+  runs (`.github/actions/ansible-lint/ansible-lint.sh`) so local and CI
+  cannot drift. Under Git Bash it re-execs itself inside WSL (that is where
+  the venv lives) and auto-skips cleanly when the venv is absent. Called by
+  `run-lint-yaml-and-bash.sh`; runnable directly too.
 - [`scripts/run-tests-bash.sh`](scripts/run-tests-bash.sh)
   (with its [`.bat`](scripts/run-tests-bash.bat) launcher) -> delegates to
   Common-Automation to run the bats tests only.
@@ -619,6 +637,79 @@ truth for the WSL->Windows path conversion that keeps `pwsh.exe -File`
 from exiting 64). They resolve it from the sibling checkout by default;
 `COMMON_AUTOMATION_ROOT` overrides the root, which the bats suites use to
 point the source at a mocked copy.
+
+### Ansible lint gate (ci-ansible.yml)
+
+The Ansible-domain lint gate lives here, next to the controller venv that
+pins its toolchain, rather than in Common-Automation's universal
+`ci-yaml.yml`. [`ci-ansible.yml`](.github/workflows/ci-ansible.yml) is one
+`ansible` job (one PR status check, `ci-ansible / ansible`) that runs
+`ansible-lint` over the caller repo's Ansible content.
+
+**Consumer wiring.** A consumer adds a thin caller and needs no inputs:
+
+```yaml
+jobs:
+  ansible:
+    uses: Klark-Morrigan/Common-Ansible/.github/workflows/ci-ansible.yml@master
+```
+
+The job checks out the caller, then - only when the caller is not
+Common-Ansible itself - sparse-checks-out this repo at `master` into
+`.common-ansible/` (the toolchain lockfile, the bundled config, and the
+substrate `roles/`). It sets `ANSIBLE_ROLES_PATH` to the caller's own
+`roles/` ahead of the substrate `roles/`, so a consumer's roles resolve by
+short name while reusing substrate roles. The caller's repo stays the lint
+target (`--project-dir`); the sibling checkout only supplies the toolchain
+and config. On self runs the branch collapses to this repo's own
+workspace. This sibling-checkout + roles-path scaffold is shared wiring
+that [feature 21](docs/dev/implementation/21-molecule-ci-in-common-ansible/problem.md)'s
+molecule gate reuses.
+
+Runner selection, highest precedence first: the `runner` input (a per-call
+or `workflow_dispatch` override), else the caller's `CI_ANSIBLE_RUNNER`
+repo/org variable, else `ubuntu-latest`.
+
+**Execution model - a venv, not a Docker image.** The old Common-Automation
+gate built a Docker image per run; this one installs the exact
+`ansible-core` + `ansible-lint` closure into a `setup-python` interpreter
+and runs `ansible-lint` straight from PATH - no image, no version getter,
+no `retry.sh`. The lockfile is the reproducibility boundary the image used
+to provide, closed on two axes (see problem.md's
+[hermeticity trade-off](docs/dev/implementation/20-ansible-lint-ci-in-common-ansible/problem.md#the-hermeticity-trade-off-and-how-it-is-closed)):
+
+- **Hash-locked closure.** [`requirements.txt`](requirements.txt) is a
+  `pip-compile --generate-hashes` lockfile of the whole transitive closure,
+  compiled from the human-edited [`requirements.in`](requirements.in)
+  (`ansible-core`, `ansible-lint`). Both CI and bootstrap install it with
+  `pip install --require-hashes`, so a drifted or unhashed line fails loudly
+  rather than floating. Regenerate after editing `requirements.in` with
+  `pip-compile --generate-hashes requirements.in`.
+- **Pinned interpreter.** `setup-python` pins the Python minor (3.12) to
+  the controller's Ubuntu 24.04 interpreter, so the closure resolves
+  against a fixed base.
+
+**Config: strict by default, consumer-overridable.** With no consumer
+config the bundled
+[`ansible-lint.config.yml`](.github/actions/ansible-lint/ansible-lint.config.yml)
+applies - ansible-lint's strictest `production` profile - so every consumer
+inherits the same bar. A consumer that needs to tighten or relax it drops a
+`.ansible-lint` / `.ansible-lint.yml` / `.ansible-lint.yaml` at its repo
+root; that file wins. The gate **auto-skips** (a `::notice::`, exit 0) on a
+repo with no `ansible.cfg` / `playbooks/` / `roles/`, so it is safe to wire
+into every consumer's CI regardless of whether they carry Ansible content.
+The detection and config resolution live in a single helper,
+[`ansible-lint.sh`](.github/actions/ansible-lint/ansible-lint.sh), that both
+the composite action and the local runner exec, so CI and local cannot
+drift.
+
+**Test note - a deliberate coverage reduction.** The old Common-Automation
+composite had three bats cases exercising a **retry** around the per-run
+Docker image build. Those cases were **not** ported: the venv model has no
+image build to retry, so the retried artifact no longer exists. This is an
+intentional, documented drop, not a gap - the remaining bats cover
+auto-skip, the `production` default, a known violation, and the
+consumer-config override.
 
 ## Consuming the substrate
 
