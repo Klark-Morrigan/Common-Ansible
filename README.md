@@ -689,6 +689,34 @@ to provide, closed on two axes (see problem.md's
   the controller's Ubuntu 24.04 interpreter, so the closure resolves
   against a fixed base.
 
+**Where the toolchain comes from - hosted vs self-hosted.** *Whether* to
+install is decided at runtime on `runner.environment`, not on a runner
+label (a self-hosted pool is targeted by an arbitrary custom label no
+inspection could classify), the same way Common-DotNet's `ci-dotnet.yml`
+gates its provisioning:
+
+- **`github-hosted`.** A bare image carries no controller, so the job
+  installs the hash-locked closure into a `setup-python` interpreter (the
+  hosted-path hermeticity boundary above). The controller provider cannot
+  run here - it reaches the substrate bootstrap through `pwsh.exe`/WSL, a
+  Windows entry point absent on a bare ubuntu image.
+- **`self-hosted`.** The runner image is expected to carry the controller
+  venv pre-baked - how the pool is provisioned is the runner operator's
+  concern, external to this workflow - so the job reuses it rather than
+  installing a second, divergent copy. A consumer reuses it through the
+  substrate's SSOT
+  [`ops/bootstrap-controller-consumer.sh`](ops/bootstrap-controller-consumer.sh)
+  (a no-op when the venv is already baked); Common-Ansible's own runs
+  assert their repo `.venv` is present and reuse it. No `setup-python` /
+  `pip` / `galaxy` runs on this path.
+
+Whichever path runs puts its toolchain `bin` on `$GITHUB_PATH`, so the
+ansible-lint composite resolves one `ansible-lint`. A consumer whose
+Ansible content is nested (e.g. `hyper-v/ubuntu/Ansible`) can pass its
+slice root via the `ansible-slice-root` input for an accurate provider
+summary; it does not affect the lint pass, which always targets the repo
+root.
+
 **Config: strict by default, consumer-overridable.** With no consumer
 config the bundled
 [`ansible-lint.config.yml`](.github/actions/ansible-lint/ansible-lint.config.yml)
