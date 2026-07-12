@@ -50,9 +50,17 @@ no-ops when current), ensures WSL2 is installed (delegating to
 distro actually has `bash` (delegating to `Assert-WslHasBash`), and
 then invokes
 [`ops/_bootstrap-controller-wsl.sh`](ops/_bootstrap-controller-wsl.sh)
-inside WSL to create the Python venv, install Ansible from
-`requirements.txt`, and pull the Galaxy collections pinned in
-`requirements.yml`. Both stages are idempotent.
+inside WSL to create the Python venv, install the controller toolchain
+(`ansible-core` plus `ansible-lint`) from `requirements.txt`, and pull
+the Galaxy collections pinned in `requirements.yml`. Both stages are
+idempotent.
+
+`requirements.txt` is a hash-locked lockfile compiled by `pip-compile`
+from the human-edited [`requirements.in`](requirements.in); the bootstrap
+installs it with `pip install --require-hashes`, so the full transitive
+closure is frozen and a drifted or unhashed line fails loudly. After
+editing `requirements.in`, regenerate the lock with
+`pip-compile --generate-hashes requirements.in`.
 
 When `python3` (plus `python3-venv`) or `jq` is absent the bash
 stage installs the missing package via `sudo apt-get`; the existing
