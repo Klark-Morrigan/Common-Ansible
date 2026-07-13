@@ -47,13 +47,20 @@
 # installing the toolchain, and installing collections are the reusable
 # Ansible-run scaffold that feature 21's molecule workflow reuses - this
 # workflow owns that wiring so the two gates resolve the pinned toolchain
-# identically. The lint pass deliberately does NOT export an
-# ANSIBLE_ROLES_PATH: that env var overrides a caller's root ansible.cfg
-# `roles_path`, which would clobber the consumers' nested-slice lint shim
-# (`roles_path = hyper-v/ubuntu/Ansible/roles`) and lose the nested roles.
-# Roles resolution during lint is governed by each caller's root cfg
-# instead; resolving substrate roles onto the path is a molecule need, so
-# that export belongs to feature 21's molecule job, not here.
+# identically. For an OWN-ROLES caller the lint pass deliberately does NOT
+# export an ANSIBLE_ROLES_PATH: that env var overrides a caller's root
+# ansible.cfg `roles_path`, which would clobber the consumers' nested-slice
+# lint shim (`roles_path = hyper-v/ubuntu/Ansible/roles`) and lose the
+# nested roles. Roles resolution during lint is governed by each such
+# caller's root cfg instead.
+#
+# The one exception is a SUBSTRATE-ONLY COMPOSER (composes-substrate-roles:
+# true) - a caller whose playbook `import_role`s the substrate roles and
+# ships none of its own. It has no own-roles cfg for the env var to
+# clobber, and its static import_roles must resolve at syntax-check time,
+# so the job puts the staged substrate roles/ on ANSIBLE_ROLES_PATH. That
+# is the only path where this workflow exports the var; molecule's separate
+# converge-time roles-path need lives in feature 21's molecule job.
 #
 # Self vs consumer. When this workflow runs on its own PRs
 # (`github.repository == Klark-Morrigan/Common-Ansible`) it uses its own
@@ -112,6 +119,19 @@ on:
         required: false
         type: string
         default: '.'
+      composes-substrate-roles:
+        description: >-
+          Set true for a substrate-only composer: a caller whose playbook
+          statically `import_role`s the Common-Ansible substrate roles
+          (jdk, dotnet_sdk, dotnet_tools) and ships no roles of its own.
+          It puts the staged substrate `roles/` on ANSIBLE_ROLES_PATH so
+          ansible-lint's syntax-check can resolve those roles. Leave false
+          (the default) for an own-roles caller, whose root ansible.cfg
+          (real or nested-slice shim) governs roles resolution and which
+          must not have that cfg clobbered by an env override.
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       runner:
@@ -133,6 +153,19 @@ on:
         required: false
         type: string
         default: '.'
+      composes-substrate-roles:
+        description: >-
+          Set true for a substrate-only composer: a caller whose playbook
+          statically `import_role`s the Common-Ansible substrate roles
+          (jdk, dotnet_sdk, dotnet_tools) and ships no roles of its own.
+          It puts the staged substrate `roles/` on ANSIBLE_ROLES_PATH so
+          ansible-lint's syntax-check can resolve those roles. Leave false
+          (the default) for an own-roles caller, whose root ansible.cfg
+          (real or nested-slice shim) governs roles resolution and which
+          must not have that cfg clobbered by an env override.
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   ansible:
@@ -177,13 +210,15 @@ jobs:
       # composite step needs the if-guarded self/consumer pair (the eager-
       # resolution constraint documented in the header).
       #
-      # Note: no ANSIBLE_ROLES_PATH is exported here. During lint, roles
-      # resolution must be governed by the caller's root ansible.cfg - the
-      # consumers' nested-slice lint shim (`roles_path =
-      # hyper-v/ubuntu/Ansible/roles`) resolves their short-name roles, and
-      # an env override would clobber it (see the header). Pushing the
-      # substrate roles/ onto the path is a molecule-only need, so that
-      # export lives in feature 21's molecule job, not this lint job.
+      # Note: this step exports no ANSIBLE_ROLES_PATH. For an own-roles
+      # caller, roles resolution during lint must be governed by the
+      # caller's root ansible.cfg - the consumers' nested-slice lint shim
+      # (`roles_path = hyper-v/ubuntu/Ansible/roles`) resolves their
+      # short-name roles, and an env override would clobber it (see the
+      # header). The lone exception, a substrate-only composer, gets the
+      # substrate roles/ onto the path in the dedicated composer step below
+      # (it has no own-roles cfg to clobber). Molecule's separate
+      # converge-time roles-path lives in feature 21's molecule job.
       - name: Resolve substrate wiring
         id: substrate
         shell: bash
@@ -193,6 +228,26 @@ jobs:
           else
             echo "root=.common-ansible" >> "${GITHUB_OUTPUT}"
           fi
+
+      # Substrate-composer roles resolution. A substrate-only composer
+      # (e.g. Vm-Provisioner) ships no roles of its own: its playbook
+      # statically `import_role`s the substrate roles (jdk, dotnet_sdk,
+      # dotnet_tools). Because import_role is static, ansible-lint's
+      # syntax-check must resolve those roles at lint time, so the staged
+      # substrate roles/ have to be on the path. This is the ONE case where
+      # exporting ANSIBLE_ROLES_PATH is correct: the composer has no
+      # own-roles root ansible.cfg for the env var to clobber (the hazard
+      # the own-roles branch avoids by exporting nothing), so the substrate
+      # path is the only - and required - source. Own-roles callers leave
+      # composes-substrate-roles false and stay governed by their root cfg
+      # (Common-Ansible's real cfg, or a consumer's nested-slice lint shim).
+      # steps.substrate.outputs.root is always .common-ansible here, since a
+      # composer is always a consumer, but reusing it keeps the path DRY.
+      - name: Resolve substrate-composer roles path
+        if: inputs.composes-substrate-roles
+        shell: bash
+        run: |
+          echo "ANSIBLE_ROLES_PATH=${GITHUB_WORKSPACE}/${{ steps.substrate.outputs.root }}/roles" >> "${GITHUB_ENV}"
 
       # --- github-hosted provisioning (both repo branches) ---------------
       # A bare image carries no controller, so install the hash-locked

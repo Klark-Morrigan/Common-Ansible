@@ -662,16 +662,35 @@ substrate `roles/`). The caller's repo stays the lint target
 toolchain and config. On self runs the branch collapses to this repo's own
 workspace.
 
-The lint pass deliberately does **not** export an `ANSIBLE_ROLES_PATH`.
-That env var overrides a caller's root `ansible.cfg` `roles_path`, and the
-consumers keep their Ansible content in a nested `hyper-v/ubuntu/Ansible/`
-slice resolved by a root-cfg **lint shim**
-(`roles_path = hyper-v/ubuntu/Ansible/roles`); an env override would
-clobber the shim and the nested roles would stop resolving. Roles
-resolution during lint is therefore governed by each caller's root cfg -
-this repo's real cfg on self runs, the consumers' shim on consumer runs.
-Pushing the substrate `roles/` onto the path is a molecule-only need
-(converge must load the substrate roles), so that export belongs to
+**Roles resolution during lint - by caller shape.** How short-name roles
+resolve depends on whether the caller ships roles of its own:
+
+- **Own-roles callers** (this repo on self runs; consumers like
+  Infrastructure-Vm-Users and Infrastructure-GitHubRunners): the lint pass
+  deliberately does **not** export an `ANSIBLE_ROLES_PATH`. That env var
+  overrides a caller's root `ansible.cfg` `roles_path`, and the consumers
+  keep their Ansible content in a nested `hyper-v/ubuntu/Ansible/` slice
+  resolved by a root-cfg **lint shim**
+  (`roles_path = hyper-v/ubuntu/Ansible/roles`); an env override would
+  clobber the shim and the nested roles would stop resolving. Resolution is
+  therefore governed by each caller's root cfg - this repo's real cfg on
+  self runs, the consumers' shim on consumer runs.
+- **Substrate-only composers** (Infrastructure-Vm-Provisioner): a caller
+  whose playbook statically `import_role`s the substrate roles (`jdk`,
+  `dotnet_sdk`, `dotnet_tools`) and ships **none of its own**. Because
+  `import_role` is static, ansible-lint's syntax-check must resolve those
+  roles at lint time, so the job puts the staged substrate `roles/` on
+  `ANSIBLE_ROLES_PATH`. This does not reintroduce the clobber above: the
+  composer has no own-roles cfg for the env var to override - the substrate
+  path is the only, and required, source. A composer opts in by passing
+  `composes-substrate-roles: true` on its `ci-ansible` call, and adds a
+  minimal root `ansible.cfg` shim (empty `[defaults]`) so the gate
+  activates instead of auto-skipping; the shim sets no `roles_path` (it
+  would be clobbered) - activation is its only job.
+
+Pushing the substrate `roles/` onto the path for a *converge* (as opposed
+to a composer's syntax-check) is a molecule-only need, so that export
+belongs to
 [feature 21](docs/dev/implementation/21-molecule-ci-in-common-ansible/problem.md)'s
 molecule gate, not this lint job. The sibling-checkout scaffold itself is
 shared wiring that the molecule gate reuses.

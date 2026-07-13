@@ -104,10 +104,17 @@ the check is defined and who picks it up.
    composite action tree plus its now-orphaned lib dependencies are
    deleted from Common-Automation. It is left with only the cross-cutting
    linters (`yamllint`, `actionlint`, `action-validator`).
-4. Every Ansible consumer repo (Common-Ansible itself,
-   Infrastructure-Vm-Users, Infrastructure-GitHubRunners) is rewired: its
-   thin workflow stops getting ansible-lint from `ci-yaml.yml` and starts
-   consuming Common-Ansible's Ansible-domain workflow.
+4. Every Ansible consumer repo is rewired: its thin workflow stops getting
+   ansible-lint from `ci-yaml.yml` and starts consuming Common-Ansible's
+   Ansible-domain workflow. Three consumers carry existing coverage across
+   unchanged (Common-Ansible itself, Infrastructure-Vm-Users,
+   Infrastructure-GitHubRunners - all with a root `ansible.cfg` today). A
+   fourth, Infrastructure-Vm-Provisioner, has a nested Ansible slice whose
+   substrate-composing playbook auto-skipped the old gate (no root
+   `ansible.cfg`); it is brought under the new gate for the first time,
+   which the new workflow can do because it stages the substrate roles the
+   composer references (`jdk`, `dotnet_sdk`, `dotnet_tools`) - a small
+   coverage addition alongside the relocation, not a rule change.
 5. The local pre-push runners are updated on both sides: Common-Automation's
    `_run-lint-yaml-and-bash.sh` drops its `run_ansible_lint` step, and
    Common-Ansible gains a venv-based local ansible-lint step so its own
