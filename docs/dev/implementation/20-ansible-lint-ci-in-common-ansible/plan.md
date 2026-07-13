@@ -758,14 +758,17 @@ old gate it would otherwise break.
 - Update the existing `ci-yaml.yml` header comment (the "four parallel lint
   jobs including ansible-lint" claim) to the three cross-cutting linters,
   noting the Ansible gate now comes from `ci-ansible.yml`.
-- Keep local lint parity: a local ansible-lint run for Vm-Provisioner must
-  also see the substrate roles. Its runtime bridge already resolves
-  `consumer:substrate` on `ANSIBLE_ROLES_PATH` (`ops/_ansible-env.sh`), so
-  the local path is wired the same way. (Common-Automation's delegated
-  local engine no longer runs ansible-lint after
-  [Step 3.4](#step-34---drop-ansible-lint-from-the-local-lint-runner), so
-  the composer's local pass comes through this substrate-aware path, not
-  the old docker gate.)
+- Keep local lint parity: add `scripts/run-lint-ansible.sh` (the local twin
+  of Common-Ansible's [Step 1.5](#step-15---local-pre-push-parity) runner)
+  and wire it into `scripts/run-lint-yaml-and-bash.sh`. It reuses the shared
+  Common-Ansible controller venv, the bundled helper, and its config, and
+  exports `ANSIBLE_ROLES_PATH = <substrate>/roles` (substrate-only,
+  mirroring `Common-Ansible/ops/_ansible-env.sh`'s composer branch) so the
+  local pass resolves the composed roles. This is needed because Common-
+  Automation's delegated engine no longer runs ansible-lint after
+  [Step 3.4](#step-34---drop-ansible-lint-from-the-local-lint-runner); the
+  composer's local pass comes through this substrate-aware runner, not the
+  old docker gate.
 
 **Tests.**
 
@@ -778,6 +781,9 @@ old gate it would otherwise break.
   it.
 - Regression: the own-roles consumers and the Common-Ansible self run stay
   green (unaffected - they set no composer input).
+- Local parity: `scripts/run-lint-ansible.sh` lints the composer playbook
+  green through the shared controller venv (substrate roles resolved), and
+  `shellcheck` passes on the new runner at CI's strict bar.
 
 ```mermaid
 flowchart LR
