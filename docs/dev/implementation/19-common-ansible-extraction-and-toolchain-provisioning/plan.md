@@ -1113,23 +1113,113 @@ classDiagram
   ExtraVars --> Roles : per-section dispatch
 ```
 
-### Step 9.2 - Declare shellcheck, bats, docker on ubuntu-02-ci and re-provision
+### Step 9.2 - Wire, declare, and prove sections 2 and 3 on the runner
+
+Step 9.1 gave the taxonomy a validated shape but no consumer: the block rides
+along in `vm_provisioner_config` and nothing installs from it. These three
+sub-steps close that gap - wire the dispatch, declare the tools on the real
+runner, and prove the end state on a VM - each reviewed and committed on its
+own.
+
+#### Step 9.2.A - Wire the consumer playbook to dispatch sections 2 and 3
+
+The consumer playbook (`Infrastructure-Vm-Provisioner`
+`hyper-v/ubuntu/Ansible/playbooks/provision-toolchains.yml`) composed only the
+section-1 roles (jdk -> dotnet_sdk -> dotnet_tools). Extend it to select each
+host's `toolchains` block off `vm_provisioner_config` (matching `vmName` to
+`inventory_hostname`) and dispatch by section: `vmDownloaded` ->
+`toolchain_apt_packages` (the role is always included, a no-op when empty), and
+a `docker` entry in `baseImage` gates the `docker` role (a whole-daemon
+install).
+
+Docker group membership is deliberately NOT set here. This flow installs the
+daemon but leaves `docker_group_members` empty, because the runner service user
+(`runnerUsername`) is owned by the GitHubRunners config, not this provisioner
+secret. GitHubRunners adds its runner user to the `docker` group in its own
+flow (membership is additive), so the root-equivalent socket grant stays with
+the repo that knows the user. This refines Section 8.1's "add runner user to
+docker group": the role still can (via `docker_group_members`), but the grant
+is a consumer concern placed in GitHubRunners, not in this provisioner flow.
+
+- **Reason:** 9.1 validates the block but nothing installs from it; this is
+  the missing per-host dispatch that turns a declared taxonomy into installed
+  tools.
+- **Tests:** `ansible-playbook --syntax-check` resolves all five roles via the
+  sibling roles path; yamllint clean. The authoritative ansible-lint rule pass
+  runs in `ci-ansible` (its composer stages the substrate roles onto
+  `ANSIBLE_ROLES_PATH`). No molecule - the playbook is a thin composition and
+  each role carries its own molecule scenario.
+- **README:** Vm-Provisioner README - the toolchains-taxonomy-block section,
+  the flow file-list, the config-schema table row, and the docker-group
+  boundary.
+
+```mermaid
+flowchart LR
+  CFG[vm_provisioner_config.toolchains] --> SEL[select by vmName]
+  SEL -->|vmDownloaded| APT[toolchain_apt]
+  SEL -->|baseImage: docker| DOCK[docker role]
+```
+
+#### Step 9.2.B - Declare shellcheck, bats, docker on ubuntu-02-ci and re-provision
 
 Add the three tools to the `ubuntu-02-ci` definition in the
-`VmProvisionerConfig-Production` secret and run the toolchain flow against
-it.
+`VmProvisionerConfig-Production` secret (a `toolchains` block: `vmDownloaded`
+shellcheck + bats, `baseImage` docker) and run the toolchain flow against it.
 
 - **Reason:** Applies the work to the actual red runner.
-- **Tests:** Post-run probe on the VM: shellcheck/bats/docker present, on
-  PATH, daemon reachable, runner user in docker group.
-- **README:** Note the `ubuntu-02-ci` toolchain declaration in the
-  consumer repo's README/config docs that own the production VM
-  definitions.
+- **Tests:** Post-run probe on the VM: shellcheck/bats present and on PATH at
+  their pinned versions, the docker daemon installed and reachable
+  (`sudo docker ps`). Runner-user socket access (the `docker` group membership
+  `ci-yaml` / `ci-dotnet` need) is provisioned separately by GitHubRunners - a
+  cross-repo prerequisite for 9.3, not this flow's output.
+- **README:** Note the `ubuntu-02-ci` toolchain declaration in the consumer
+  repo's README/config docs that own the production VM definitions.
 
 ```mermaid
 flowchart LR
   SEC[(VmProvisionerConfig-Production)] -->|ubuntu-02-ci toolchains| FLOW[toolchain flow 5.5]
   FLOW --> VM[ubuntu-02-ci]
+```
+
+#### Step 9.2.C - E2E coverage for sections 2 and 3 (Infrastructure-E2E)
+
+Prove the wired flow installs sections 2/3 on a real VM. The coverage lives in
+Infrastructure-E2E (E2E is threaded through that repo + `menu.ps1`, not
+embedded in the implementing repos) and runs under `ToolchainsFlow=ansible`
+only - the PowerShell reconciler has no section-2/3 concept. Author a
+`toolchains` block on the provisioning scenario's VM1 (shellcheck `0.9.0-1`,
+bats `1.10.0-1`, docker); VM2 stays clean as the blast-radius witness proving
+the per-host `selectattr` targeting does not leak the tools onto a VM that did
+not declare them.
+
+New per-assertion files mirror the jdk/dotnet pattern (one SSH-probing,
+unit-tested file each): a `toolchain_apt` assertion (each pinned tool on the
+non-login PATH, exact `dpkg-query` version, and executable - bats runs a
+trivial `.bats`, `shellcheck --version` reports the pin), a `docker` assertion
+(CLI present, `systemctl is-active docker`, `sudo docker ps` exit 0 - as root,
+matching 9.2.A's boundary, NOT VM-admin group membership), and a "no
+section-2/3 tools on VM2" witness. Install assertions run in Phase 1 (after the
+jdk/dotnet assertions); Phase 2 re-runs the flow and re-asserts presence as the
+idempotence proof. Lifecycle is install + idempotence only - the apt and docker
+roles implement no removal, so there is no uninstall / version-change phase
+(unlike jdk/dotnet). Docker on a real VM needs no docker-in-docker molecule
+caveat.
+
+- **Reason:** The section-2/3 path had role-level molecule coverage but was
+  never exercised end-to-end on a VM (the existing E2E "toolchains" flow is
+  section-1 only); this is 9.2's verification arm.
+- **Tests:** The new assertion files plus their unit tests (mocking
+  `Invoke-SshClientCommand`), mirroring
+  `Tests/Invoke-JdkInstallAssertions.Tests.ps1`; the live run turns them green
+  against a real VM.
+- **README:** Infrastructure-E2E README - add the section-2/3 assertions to the
+  provisioning scenario's coverage list.
+
+```mermaid
+flowchart LR
+  V1[VM1: toolchains block] --> FLOW[ansible toolchain flow]
+  FLOW --> A1[assert shellcheck/bats/docker present]
+  V2[VM2: no toolchains] --> A2[assert absent - witness]
 ```
 
 ### Step 9.3 - Re-run the gates and confirm green
