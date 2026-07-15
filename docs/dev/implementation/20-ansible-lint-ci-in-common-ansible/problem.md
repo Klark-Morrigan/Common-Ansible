@@ -111,10 +111,13 @@ the check is defined and who picks it up.
    Infrastructure-GitHubRunners - all with a root `ansible.cfg` today). A
    fourth, Infrastructure-Vm-Provisioner, has a nested Ansible slice whose
    substrate-composing playbook auto-skipped the old gate (no root
-   `ansible.cfg`); it is brought under the new gate for the first time,
-   which the new workflow can do because it stages the substrate roles the
+   `ansible.cfg`); it is brought under the new gate for the first time -
+   sequenced *after* the old gate is removed, because the root `ansible.cfg`
+   shim that stops the new gate auto-skipping it would equally re-trigger
+   the old docker gate, which cannot resolve the composer's substrate roles.
+   The new workflow can gate it because it stages the substrate roles the
    composer references (`jdk`, `dotnet_sdk`, `dotnet_tools`) - a small
-   coverage addition alongside the relocation, not a rule change.
+   coverage addition, not a rule change.
 5. The local pre-push runners are updated on both sides: Common-Automation's
    `_run-lint-yaml-and-bash.sh` drops its `run_ansible_lint` step, and
    Common-Ansible gains a venv-based local ansible-lint step so its own
@@ -312,6 +315,15 @@ supplies its scenario setup. ansible-lint first, molecule second.
   ansible-lint coverage in the gap. The plan sequences the new workflow
   onto Common-Ansible's `master` and rewires consumers before the
   Common-Automation step is removed.
+- A second ordering hazard specific to Vm-Provisioner: the root
+  `ansible.cfg` shim that activates the new gate on its nested slice uses
+  the same root-`ansible.cfg` detection as the old Common-Automation gate,
+  so the shim would re-activate that (docker, `/work`-mount) gate - which
+  sets no composer `ANSIBLE_ROLES_PATH` and fails `syntax-check` with
+  `role 'jdk' not found`, in both CI and local lint. Because Vm-Provisioner
+  was never gated by the old gate (it auto-skipped), the plan sequences its
+  shim + caller *after* the old gate is removed, so the two never coexist;
+  this adds no coverage gap.
 - A consumer that resolves substrate roles by short name will fail lint
   if the sibling checkout / `ANSIBLE_ROLES_PATH` wiring is absent; this is
   the same wiring feature 21 needs and must be shared, not duplicated.

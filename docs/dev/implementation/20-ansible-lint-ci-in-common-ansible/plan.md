@@ -22,15 +22,16 @@ migration), or the survey.
 - [Section 2 - Consumers adopt `ci-ansible.yml`](#section-2---consumers-adopt-ci-ansibleyml)
   - [Step 2.1 - Infrastructure-Vm-Users](#step-21---infrastructure-vm-users)
   - [Step 2.2 - Infrastructure-GitHubRunners](#step-22---infrastructure-githubrunners)
-  - [Step 2.3 - Infrastructure-Vm-Provisioner](#step-23---infrastructure-vm-provisioner)
 - [Section 3 - Common-Automation: remove the old gate and plumbing](#section-3---common-automation-remove-the-old-gate-and-plumbing)
   - [Step 3.1 - Remove the ansible-lint step from `ci-yaml.yml`](#step-31---remove-the-ansible-lint-step-from-ci-yamlyml)
   - [Step 3.2 - Delete the composite action tree](#step-32---delete-the-composite-action-tree)
   - [Step 3.3 - Remove orphaned lib dependencies](#step-33---remove-orphaned-lib-dependencies)
   - [Step 3.4 - Drop ansible-lint from the local lint runner](#step-34---drop-ansible-lint-from-the-local-lint-runner)
   - [Step 3.5 - README and doc cleanup](#step-35---readme-and-doc-cleanup)
-- [Section 4 - Verify and close](#section-4---verify-and-close)
-  - [Step 4.1 - Cross-repo coverage verification](#step-41---cross-repo-coverage-verification)
+- [Section 4 - Infrastructure-Vm-Provisioner: first-time gate](#section-4---infrastructure-vm-provisioner-first-time-gate)
+  - [Step 4.1 - Add the root shim and thin caller (composer)](#step-41---add-the-root-shim-and-thin-caller-composer)
+- [Section 5 - Verify and close](#section-5---verify-and-close)
+  - [Step 5.1 - Cross-repo coverage verification](#step-51---cross-repo-coverage-verification)
 
 ## Conventions and sequencing
 
@@ -63,39 +64,48 @@ flowchart LR
   subgraph S3["Section 3 - Common-Automation"]
     C["remove ansible-lint step<br/>+ delete composite/lib"]
   end
-  subgraph S4["Section 4"]
+  subgraph S4["Section 4 - Vm-Provisioner"]
+    VP["add root shim + composer caller<br/>(first-ever gate)"]
+  end
+  subgraph S5["Section 5"]
     D["verify: every Ansible repo<br/>gated, no orphan refs"]
   end
   A -->|"Common-Ansible now double-<br/>covered (old + new)"| B
-  B -->|"all consumers on new gate"| C
-  C --> D
-  linkStyle 0,1,2 stroke:#2a2
+  B -->|"own-roles consumers on new gate"| C
+  C -->|"old gate gone -> shim can land<br/>without re-triggering it"| VP
+  VP --> D
+  linkStyle 0,1,2,3 stroke:#2a2
 ```
 
 Coverage state after each section (ci-ansible = ansible-lint runs against
 it via the new gate):
 
-| Repo | Start | After S1 | After S2 | After S3 |
-| --- | --- | --- | --- | --- |
-| Common-Ansible | ci-yaml | ci-yaml + ci-ansible | ci-yaml + ci-ansible | ci-ansible |
-| Vm-Users | ci-yaml | ci-yaml | ci-yaml + ci-ansible | ci-ansible |
-| GitHubRunners | ci-yaml | ci-yaml | ci-yaml + ci-ansible | ci-ansible |
-| Vm-Provisioner | (skips) | (skips) | ci-ansible (new) | ci-ansible |
-| non-Ansible repos | ci-yaml (skips) | (skips) | (skips) | no step |
+| Repo | Start | After S1 | After S2 | After S3 | After S4 |
+| --- | --- | --- | --- | --- | --- |
+| Common-Ansible | ci-yaml | ci-yaml + ci-ansible | ci-yaml + ci-ansible | ci-ansible | ci-ansible |
+| Vm-Users | ci-yaml | ci-yaml | ci-yaml + ci-ansible | ci-ansible | ci-ansible |
+| GitHubRunners | ci-yaml | ci-yaml | ci-yaml + ci-ansible | ci-ansible | ci-ansible |
+| Vm-Provisioner | (skips) | (skips) | (skips) | (skips) | ci-ansible (new) |
+| non-Ansible repos | ci-yaml (skips) | (skips) | (skips) | no step | no step |
 
 No cell is ever empty for an already-covered Ansible repo - the transition
 is additive-then-subtractive. Vm-Provisioner is the one deliberate
-addition: it auto-skipped the old gate (no root `ansible.cfg`), and Step
-1.9 brings its substrate-composing playbook under the new gate for the
-first time (see [Step 1.9](#step-19---extend-the-gate-to-substrate-composing-consumers-vm-provisioner)).
+addition, and it is sequenced last: it auto-skipped the old gate (no root
+`ansible.cfg`), so it carries no coverage to preserve, and its enabling
+root shim would re-trigger the old gate (identical root-`ansible.cfg`
+detection) if the two ever coexisted. Section 4 therefore adds its shim and
+composer caller only *after* Section 3 removes the old gate, bringing its
+substrate-composing playbook under the new gate for the first time (see
+[Section 4](#section-4---infrastructure-vm-provisioner-first-time-gate); the
+workflow capability it relies on lands earlier in
+[Step 1.9](#step-19---extend-the-gate-to-substrate-composing-consumers-vm-provisioner)).
 
 The S1 -> S2 edge carries a prerequisite gate: Steps 1.7-1.9 must be on
 Common-Ansible `master` before Section 2. The consumers keep their Ansible
 content in a nested `hyper-v/ubuntu/Ansible/` slice, so until ci-ansible
 reuses the self-hosted controller (1.7), stops overriding an own-roles
-consumer's root `ansible.cfg` shim (1.8), and resolves substrate roles for
-a substrate-only composer (1.9), a consumer's `ci-ansible` call cannot go
-green.
+consumer's root `ansible.cfg` shim (1.8), and gains the substrate-composer
+branch (1.9), a consumer's `ci-ansible` call cannot go green.
 
 ## Section 1 - Common-Ansible: stand up the venv ansible-lint gate
 
@@ -482,46 +492,47 @@ it needs a resolution rule the own-roles consumers do not: because
 substrate roles, so the substrate roles have to be on the path during
 lint - the one case where a lint run legitimately needs them.
 
-**What.** This step completes the roles-resolution contract the lint job
-applies, by caller shape:
+**What.** This step adds the **substrate-composer branch** to the reusable
+`ci-ansible.yml` - the workflow *capability* a composer needs. The
+Vm-Provisioner repo-side adoption that exercises it (its root shim, its
+thin caller, its local parity) lands later, in
+[Section 4](#section-4---infrastructure-vm-provisioner-first-time-gate),
+after Section 3 removes the old gate (the shim would otherwise re-trigger
+it - see the [ordering section](#cross-repo-ordering-no-coverage-gap)).
+
+The branch completes the roles-resolution contract by caller shape:
 
 - **Own-roles caller** (Common-Ansible self; Vm-Users, GitHubRunners): the
   caller's root `ansible.cfg` (real or shim) governs `roles_path`; the job
-  exports nothing (Step 1.8).
+  exports nothing (Step 1.8). Unchanged by this step.
 - **Substrate-only composer** (Vm-Provisioner): the job puts the staged
   substrate roles (`.common-ansible/roles`) on `ANSIBLE_ROLES_PATH`. This
   does **not** reintroduce the Step 1.8 clobber, because the composer has
   no own-roles cfg to override - the substrate path is the only source,
   and is required.
 
-Concretely:
+Concretely, in the reusable workflow:
 
-- Add a root `ansible.cfg` lint-support shim to Vm-Provisioner so
-  ansible-lint activates on it instead of auto-skipping (matching the
-  other consumers' shims in intent; here it only needs to trigger
-  activation, since role resolution comes from the job).
-- Have the reusable workflow apply the composer branch of the contract.
-  The workflow distinguishes composer from own-roles by an explicit signal
-  from the thin caller (a `with:` input on the `ci-ansible` call, e.g.
-  declaring the slice composes substrate roles) rather than fragile
-  filesystem sniffing; the exact input name is settled in execution.
-- Keep local lint parity: a local ansible-lint run for Vm-Provisioner must
-  also see the substrate roles. Its runtime bridge already resolves
-  `consumer:substrate` on `ANSIBLE_ROLES_PATH` (`ops/_ansible-env.sh`), so
-  the local path is wired the same way - substrate roles resolvable for a
-  composer in CI and locally alike.
+- The workflow distinguishes composer from own-roles by an explicit signal
+  from the thin caller (a `with:` input on the `ci-ansible` call declaring
+  the slice composes substrate roles, `composes-substrate-roles`) rather
+  than fragile filesystem sniffing. When that input is set, the composer
+  step exports `ANSIBLE_ROLES_PATH = <staged substrate>/roles`; otherwise
+  nothing is exported and the own-roles branch governs.
+- No consumer sets the input yet, so the branch is inert on `master` until
+  Section 4's caller opts in - it does not affect the own-roles consumers
+  or the Common-Ansible self run.
 
 **Tests.**
 
-- A Vm-Provisioner dispatch lints `provision-toolchains.yml` green, with
-  `jdk` / `dotnet_sdk` / `dotnet_tools` resolving from the staged
-  substrate.
-- Negative check: with the substrate off the path, `syntax-check` fails
-  with `role 'jdk' not found`, proving the composer branch is what carries
-  it.
-- Regression: the own-roles consumers (Vm-Users, GitHubRunners) and the
-  Common-Ansible self run are unaffected - still cfg-governed, no
-  substrate on their lint path.
+- `actionlint` / `action-validator` on the changed workflow.
+- Regression: with no caller setting the composer input, the own-roles
+  consumers (Vm-Users, GitHubRunners) and the Common-Ansible self run are
+  unaffected - still cfg-governed, no substrate on their lint path (the new
+  branch stays inert).
+- The composer branch itself is exercised end-to-end in
+  [Section 4](#section-4---infrastructure-vm-provisioner-first-time-gate),
+  once Vm-Provisioner opts in.
 
 ```mermaid
 flowchart TD
@@ -537,6 +548,11 @@ flowchart TD
 
 Prerequisite: Section 1 merged to Common-Ansible `master` (the reusable
 workflow and composite must be resolvable at `@master`).
+
+This section covers the two **own-roles** consumers. The substrate-only
+composer, Vm-Provisioner, adopts the gate in
+[Section 4](#section-4---infrastructure-vm-provisioner-first-time-gate) -
+after Section 3, so its enabling shim never coexists with the old gate.
 
 ### Step 2.1 - Infrastructure-Vm-Users
 
@@ -576,42 +592,15 @@ flowchart LR
   GR["GitHubRunners<br/>ci-ansible.yml (thin)"] -->|uses @master| CA["Common-Ansible<br/>ci-ansible.yml (reusable)"]
 ```
 
-### Step 2.3 - Infrastructure-Vm-Provisioner
-
-**Why.** Wire the substrate-composing consumer onto the new gate, now that
-Step 1.9 gives ci-ansible the composer roles-resolution it needs. Unlike
-Steps 2.1/2.2 this is not a like-for-like handover - Vm-Provisioner had no
-ansible-lint coverage before (it auto-skipped), so this is its first gate,
-enabled by the root shim and the `with:` signal Step 1.9 defines.
-
-**What.**
-
-- Add `.github/workflows/ci-ansible.yml` - a thin caller:
-  `uses: Klark-Morrigan/Common-Ansible/.github/workflows/ci-ansible.yml@master`,
-  `name: Common-Ansible`, `on: [pull_request, workflow_dispatch]`, passing
-  the composer signal Step 1.9 defines so the substrate roles land on the
-  lint path.
-- The root `ansible.cfg` shim itself is added in Step 1.9 (the resolution
-  change and its shim ship together); this step only wires the caller.
-- Update the existing `ci-yaml.yml` header comment (the "four parallel
-  lint jobs including ansible-lint" claim) to the three cross-cutting
-  linters, noting the Ansible gate now comes from `ci-ansible.yml`.
-
-**Tests.** `actionlint` / `action-validator` on the new workflow; a PR run
-confirms the `ansible` job lints `provision-toolchains.yml` green via the
-composer branch (its first-ever ansible-lint pass).
-
-```mermaid
-flowchart LR
-  VP["Vm-Provisioner<br/>ci-ansible.yml (thin,<br/>composer signal)"] -->|uses @master| CA["Common-Ansible<br/>ci-ansible.yml (reusable)"]
-```
-
 ## Section 3 - Common-Automation: remove the old gate and plumbing
 
-Prerequisite: Section 2 merged - all four Ansible consumers (Common-Ansible
-via self-trigger, Vm-Users, GitHubRunners, Vm-Provisioner) now get
-ansible-lint from Common-Ansible on `master`. Only now is it safe to
-remove the old gate.
+Prerequisite: Section 2 merged - every consumer the old gate covered
+(Common-Ansible via self-trigger, Vm-Users, GitHubRunners) now gets
+ansible-lint from Common-Ansible on `master`. Vm-Provisioner was never
+covered by the old gate (it auto-skipped), so it needs no coverage before
+this removal; it is gated afterwards in
+[Section 4](#section-4---infrastructure-vm-provisioner-first-time-gate).
+Only now is it safe to remove the old gate.
 
 ### Step 3.1 - Remove the ansible-lint step from `ci-yaml.yml`
 
@@ -732,9 +721,80 @@ flowchart LR
   classDef del stroke:#c33,stroke-dasharray:4 4,color:#c33
 ```
 
-## Section 4 - Verify and close
+## Section 4 - Infrastructure-Vm-Provisioner: first-time gate
 
-### Step 4.1 - Cross-repo coverage verification
+Prerequisite: Section 3 merged - Common-Automation's old ansible-lint gate
+is gone from both `ci-yaml.yml` and the local engine. Only now can
+Vm-Provisioner's root `ansible.cfg` shim land without re-triggering that
+gate (which shares the shim's root-`ansible.cfg` detection and cannot
+resolve the composer's substrate roles). The reusable workflow's
+substrate-composer branch ([Step 1.9](#step-19---extend-the-gate-to-substrate-composing-consumers-vm-provisioner))
+is already on Common-Ansible `master`.
+
+### Step 4.1 - Add the root shim and thin caller (composer)
+
+**Why.** Infrastructure-Vm-Provisioner is the one Ansible consumer with no
+gate today: its nested slice holds a single playbook
+(`provision-toolchains.yml`) that `import_role`s the substrate roles `jdk`,
+`dotnet_sdk`, `dotnet_tools`, ships no roles of its own, and has no root
+`ansible.cfg`, so it auto-skipped the old gate. This step gives it its
+first-ever ansible-lint pass, via the composer branch Step 1.9 built - and
+does so only after Section 3, so the enabling shim never coexists with the
+old gate it would otherwise break.
+
+**What.**
+
+- Add a root `ansible.cfg` lint-support shim to Vm-Provisioner so
+  ansible-lint activates on it instead of auto-skipping. It carries no
+  `roles_path` of its own (an empty `[defaults]` is enough to trigger
+  activation); role resolution comes from the job, since the composed roles
+  are substrate not present in this repo, and a `roles_path` here would be
+  clobbered by the composer's `ANSIBLE_ROLES_PATH` anyway.
+- Add `.github/workflows/ci-ansible.yml` - a thin caller:
+  `uses: Klark-Morrigan/Common-Ansible/.github/workflows/ci-ansible.yml@master`,
+  `name: Common-Ansible`, `on: [pull_request, workflow_dispatch]`, passing
+  the composer signal (`composes-substrate-roles: true`) so the staged
+  substrate roles land on `ANSIBLE_ROLES_PATH` for `syntax-check`.
+- Update the existing `ci-yaml.yml` header comment (the "four parallel lint
+  jobs including ansible-lint" claim) to the three cross-cutting linters,
+  noting the Ansible gate now comes from `ci-ansible.yml`.
+- Keep local lint parity: add `scripts/run-lint-ansible.sh` (the local twin
+  of Common-Ansible's [Step 1.5](#step-15---local-pre-push-parity) runner)
+  and wire it into `scripts/run-lint-yaml-and-bash.sh`. It reuses the shared
+  Common-Ansible controller venv, the bundled helper, and its config, and
+  exports `ANSIBLE_ROLES_PATH = <substrate>/roles` (substrate-only,
+  mirroring `Common-Ansible/ops/_ansible-env.sh`'s composer branch) so the
+  local pass resolves the composed roles. This is needed because Common-
+  Automation's delegated engine no longer runs ansible-lint after
+  [Step 3.4](#step-34---drop-ansible-lint-from-the-local-lint-runner); the
+  composer's local pass comes through this substrate-aware runner, not the
+  old docker gate.
+
+**Tests.**
+
+- `actionlint` / `action-validator` on the new workflow.
+- A PR / dispatch lints `provision-toolchains.yml` green via the composer
+  branch (its first-ever ansible-lint pass), with `jdk` / `dotnet_sdk` /
+  `dotnet_tools` resolving from the staged substrate.
+- Negative check: with the substrate off the path, `syntax-check` fails
+  with `role 'jdk' not found`, proving the composer branch is what carries
+  it.
+- Regression: the own-roles consumers and the Common-Ansible self run stay
+  green (unaffected - they set no composer input).
+- Local parity: `scripts/run-lint-ansible.sh` lints the composer playbook
+  green through the shared controller venv (substrate roles resolved), and
+  `shellcheck` passes on the new runner at CI's strict bar.
+
+```mermaid
+flowchart LR
+  VP["Vm-Provisioner<br/>ansible.cfg shim +<br/>ci-ansible.yml (composer signal)"] -->|uses @master| CA["Common-Ansible<br/>ci-ansible.yml (reusable)"]
+  CA -->|"composes-substrate-roles: true"| RP["staged substrate roles/<br/>on ANSIBLE_ROLES_PATH"]
+  RP -->|resolves| SUBR["jdk, dotnet_sdk, dotnet_tools"]
+```
+
+## Section 5 - Verify and close
+
+### Step 5.1 - Cross-repo coverage verification
 
 **Why.** The migration's success criterion is behavioural, not textual:
 every Ansible repo is still gated, no non-Ansible repo carries a dead
@@ -759,7 +819,7 @@ cross-repo `grep` sweep for the removed identifiers returning empty.
 
 ```mermaid
 flowchart TD
-  V["Step 4.1 verification"] --> CA["Common-Ansible: ci-ansible runs"]
+  V["Step 5.1 verification"] --> CA["Common-Ansible: ci-ansible runs"]
   V --> VU["Vm-Users: ci-ansible runs"]
   V --> GR["GitHubRunners: ci-ansible runs"]
   V --> VP["Vm-Provisioner: ci-ansible runs<br/>(composer branch, first lint)"]

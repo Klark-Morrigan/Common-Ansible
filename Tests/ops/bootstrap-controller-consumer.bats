@@ -131,3 +131,37 @@ run_consumer() {
     [[ "${output}" == *"did not produce"* ]]
     [[ "${output}" == *"Bootstrap the Common-Ansible substrate manually"* ]]
 }
+
+@test "Git Bash launch re-execs the consumer bootstrap under the WSL controller" {
+    # The menu (Invoke-BashScript) launches each consumer's shim - and thus
+    # this SSOT - under Git Bash, where wslpath / pwsh.exe / the Linux venv are
+    # not usable. A MINGW/MSYS uname must re-exec self under `wsl --` rather
+    # than run here (mirrors _run-playbook.sh's guard). Stub uname -> MINGW and
+    # wsl.exe -> a recorder so the re-exec wiring is asserted without a real
+    # WSL. The re-exec sits before the venv probe and any pwsh delegation, so
+    # nothing local is touched.
+    cat >"${STUBS}/uname" <<'STUB'
+#!/usr/bin/env bash
+if [[ "$1" == "-s" ]]; then echo "MINGW64_NT-10.0-26200"; else exec /usr/bin/uname "$@"; fi
+STUB
+    cat >"${STUBS}/wsl.exe" <<STUB
+#!${BASH_BIN}
+printf '%s\n' "\$@" > "${TEST_TMP}/wsl-args"
+exit 0
+STUB
+    chmod +x "${STUBS}/uname" "${STUBS}/wsl.exe"
+
+    # No venv seeded and pwsh stub records if wrongly called: the re-exec must
+    # fire before either is consulted.
+    seed_pwsh
+    run_consumer "${CONSUMER_NO_ROLES}"
+
+    [ "${status}" -eq 0 ]
+    # Re-exec fired: the recorder captured the bridge plus the translated
+    # consumer-root arg.
+    [ -f "${TEST_TMP}/wsl-args" ]
+    grep -q 'bootstrap-controller-consumer.sh' "${TEST_TMP}/wsl-args"
+    grep -q -- "${CONSUMER_NO_ROLES}"          "${TEST_TMP}/wsl-args"
+    # And nothing ran in the Git Bash process - pwsh was never delegated to.
+    [ ! -f "${MARKER}" ]
+}

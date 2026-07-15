@@ -576,14 +576,12 @@ CI is wired to three reusable workflows; nothing is copied per-repo:
   on production bash + `*.bats` suites + `+x` bit check).
 - [`.github/workflows/ci-yaml.yml`](.github/workflows/ci-yaml.yml)
   -> `Common-Automation/.github/workflows/ci-yaml.yml@master` (yamllint,
-  actionlint, action-validator, ansible-lint).
+  actionlint, action-validator).
 - [`.github/workflows/ci-ansible.yml`](.github/workflows/ci-ansible.yml)
   - the Ansible-domain gate. Unlike the three above it is **defined in
   this repo**, not a thin caller of a sibling: it self-triggers on this
   repo's own PRs and is the reusable workflow consumers call at `@master`.
-  See [Ansible lint gate](#ansible-lint-gate-ci-ansibleyml) below. (Until
-  Common-Automation drops its own ansible-lint step, `ci-yaml.yml` above
-  still lints this repo too, so Common-Ansible is briefly double-covered.)
+  See [Ansible lint gate](#ansible-lint-gate-ci-ansibleyml) below.
 
 This repo carries **no E2E gate of its own**. As the consumed substrate
 (dispatch bridge + reusable roles), its real-VM behaviour is exercised
