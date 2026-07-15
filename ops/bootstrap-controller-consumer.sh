@@ -20,10 +20,63 @@
 # resolves roles from the substrate alone.
 set -euo pipefail
 
-# The consumer's Ansible-slice root (…/hyper-v/ubuntu/Ansible), used only for
+# Anchor to this script's own dir. dirname (not ${BASH_SOURCE%/*}) so it
+# resolves whether $0 arrives with POSIX slashes (WSL / the re-exec below) or
+# a Windows argv[0] (a Git Bash launch, where %/* would strip nothing).
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The consumer's Ansible-slice root (.../hyper-v/ubuntu/Ansible), used only for
 # the roles-path summary below. Required so the message is honest about which
-# tree ANSIBLE_ROLES_PATH prefers.
+# tree ANSIBLE_ROLES_PATH prefers. Captured before the launcher bridge so it
+# can be path-translated into the WSL re-exec.
 consumer_ansible_root="${1:?usage: bootstrap-controller-consumer.sh <consumer-ansible-root>}"
+
+# ---------------------------------------------------------------------------
+# Windows launcher bridge (mirror of ops/_run-playbook.sh). This bootstrap
+# does its work inside the WSL controller: it probes the Linux venv
+# (.venv/bin/python is a Linux symlink) and, when the venv is absent, reaches
+# the substrate's Windows bootstrap through wslpath + pwsh.exe - neither of
+# which exists under Git Bash. But the operator entry points (each consumer's
+# thin bootstrap-controller.sh shim, launched by the menu's Invoke-BashScript)
+# run under Git Bash. So on a Git Bash / Cygwin launch, re-exec self inside the
+# WSL default distro - the same distro bootstrap-controller provisions and
+# drives via `wsl --`. uname -s is "Linux" inside WSL and on native-Linux CI,
+# so the re-exec fires exactly once and never on the controller itself (no
+# loop, no effect on the bats suite, which runs under Linux).
+# ---------------------------------------------------------------------------
+case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*)
+        if ! command -v wsl.exe >/dev/null 2>&1; then
+            echo "launched under Git Bash but wsl.exe is not available; this bootstrap runs in the WSL controller. Install WSL and run ops/bootstrap-controller first." >&2
+            exit 2
+        fi
+        # Translate /c/... (Git Bash) -> /mnt/c/... (WSL mount) for both this
+        # script's own path and its positional arg (a wrapper resolved the
+        # consumer root as a /c/... path the WSL side cannot open). \L
+        # lowercases the drive letter (GNU sed, which Git Bash ships).
+        wsl_self="$(printf '%s' "${script_dir}" | sed -E 's#^/([A-Za-z])/#/mnt/\L\1/#')/bootstrap-controller-consumer.sh"
+        consumer_root_wsl="$(printf '%s' "${consumer_ansible_root}" | sed -E 's#^/([A-Za-z])/#/mnt/\L\1/#')"
+        # COMMON_ANSIBLE_ROOT (test / non-standard-layout override) may also be
+        # a /c/... path; translate it and forward via WSLENV so the WSL side's
+        # resolver honours it. Empty/unset forwards harmlessly.
+        if [[ -n "${COMMON_ANSIBLE_ROOT:-}" ]]; then
+            COMMON_ANSIBLE_ROOT="$(printf '%s' "${COMMON_ANSIBLE_ROOT}" | sed -E 's#^/([A-Za-z])/#/mnt/\L\1/#')"
+            export COMMON_ANSIBLE_ROOT
+            export WSLENV="${WSLENV:+${WSLENV}:}COMMON_ANSIBLE_ROOT"
+        fi
+        # MSYS2 rewrites /-leading args into Windows paths when launching a
+        # Windows .exe, which corrupts the /mnt path; disable it for this exec.
+        export MSYS2_ARG_CONV_EXCL='*'
+        export MSYS_NO_PATHCONV=1
+        echo "Git Bash launch detected; re-executing under the WSL controller (default distro) ..." >&2
+        exec wsl.exe -- bash "${wsl_self}" "${consumer_root_wsl}"
+        ;;
+    *)
+        # WSL ("Linux" uname) or native-Linux CI: the wslpath / pwsh.exe / venv
+        # toolchain is reachable, so run in place. This is where the re-exec
+        # above lands and the path the bats suite takes.
+        ;;
+esac
 
 # The substrate root is this script's own parent (ops/ -> repo root).
 # COMMON_ANSIBLE_ROOT overrides it for tests / non-standard layouts, matching
@@ -31,7 +84,7 @@ consumer_ansible_root="${1:?usage: bootstrap-controller-consumer.sh <consumer-an
 if [[ -n "${COMMON_ANSIBLE_ROOT:-}" ]]; then
     common_ansible_root="${COMMON_ANSIBLE_ROOT}"
 else
-    common_ansible_root="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
+    common_ansible_root="$(cd "${script_dir}/.." && pwd)"
 fi
 
 venv_python="${common_ansible_root}/.venv/bin/python"
