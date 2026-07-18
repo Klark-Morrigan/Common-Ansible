@@ -1241,6 +1241,92 @@ flowchart LR
   VM --> CD[ci-dotnet green]
 ```
 
+### Step 9.4 - Gate the Ansible flow on its host-network prerequisites
+
+The Ansible toolchain flow runs no host-side gate: `provision-toolchains.sh`
+dispatches straight into staging and the bridge, so a host whose prerequisites
+are unmet fails deep and opaquely. An unelevated run dies ~30s in, inside the
+bridge's host file server, on a bare `New-NetFirewallRule: Access is denied`;
+a wedged WSL -> host portproxy relay surfaces only as a router SSH banner
+timeout, which misdirects diagnosis onto the router or the Defender rule.
+
+The PowerShell path already owns the gate this flow lacks -
+`Assert-HostNetworkPreflight`, including a `Test-IsCurrentSessionElevated`
+check - but only `provision.ps1` and `scripts/Test-HostNetworkPreflight.ps1`
+call it, and its checks model the host <-> VM path (switch, vNIC, routes, IP
+collisions, ICS DNS) rather than the WSL -> host hop the controller depends on.
+These two sub-steps close both halves: teach the gate the relay, then put the
+flow behind the gate. Each is reviewed and committed on its own. Both land in
+Infrastructure-Vm-Provisioner, which owns the pre-flight and the wrapper.
+
+#### Step 9.4.A - Teach the pre-flight the WSL -> host relay (check + self-heal)
+
+Add a check covering the WSL -> host portproxy relay, the WSL controller's only
+path to the router, with an `iphlpsvc` restart as its auto-repair. The relay
+wedges while every piece of its config still reads correct, so the check must
+diagnose by segment rather than by inspection: the host reaching `<router>:22`
+while WSL -> `<relay>:2222` opens TCP but returns no SSH banner is the wedge
+signature. Repair honours the gate's existing `-SkipRepair` switch and its
+elevation check, matching how `Reset-IcsSharing` is already gated.
+
+- **Reason:** The relay wedge is invisible to the current checks and presents
+  as a router-unreachable error, so it costs a full misdirected diagnosis pass
+  (router, then Defender rule, then portproxy table) to reach a one-line fix.
+  Config inspection cannot find it - only the segment probe separates a wedged
+  relay from a down router, because a correct rule, listener, and firewall
+  scope are all consistent with both.
+- **Tests:** Pester unit tests mirroring
+  `Tests/PowerShell/common/network/preflight/Assert-HostNetworkPreflight.Tests.ps1`,
+  mocking the probe and service cmdlets: wedged relay -> repair fires and the
+  finding resolves; healthy relay -> no restart; `-SkipRepair` -> FAIL reported
+  with no restart; unelevated -> no restart attempted.
+- **README:** Vm-Provisioner README - add the relay check to the pre-flight's
+  documented check list. Correct the `Assert-HostNetworkPreflight` header while
+  there: it claims "Five host-side checks" and "Reads only - no Get-VM* /
+  Get-Net* mutations", but the function has grown to seven and does mutate via
+  `Reset-IcsSharing` / `Set-NetConnectionProfile`.
+
+```mermaid
+flowchart LR
+  P1[host -> router:22 OK] --> D{banner from<br/>WSL -> relay:2222?}
+  D -->|no| W[wedged relay] --> R[Restart-Service iphlpsvc]
+  D -->|yes| OK[PASS]
+```
+
+#### Step 9.4.B - Gate provision-toolchains.sh behind the pre-flight
+
+Invoke the pre-flight from `provision-toolchains.sh` before staging, so the
+flow fails in seconds with an actionable message instead of deep inside the
+bridge. Elevation is a hard prerequisite of this flow specifically - the
+bridge's host file server opens its port with `New-NetFirewallRule` - so the
+gate's existing elevation check becomes a FAIL here rather than a WARN.
+
+- **Reason:** Every prerequisite this flow needs is already checked by a gate
+  it never calls; wiring it in converts a 30s opaque failure into a one-second
+  actionable one, and is the cheaper half of 9.4 (no new detection logic).
+- **Tests:** bats for the wrapper (`Tests/` alongside the existing ops suites):
+  the pre-flight runs before staging; a non-zero pre-flight aborts before the
+  bridge and stages nothing; a passing pre-flight leaves the dispatch
+  unchanged.
+- **README:** Vm-Provisioner README "Running the flow" - add elevation and the
+  pre-flight gate to the prerequisites, which currently list only the WSL
+  controller, the populated vault, and the sibling checkout. Drop the `--check`
+  example from that section: no substrate role sets `check_mode`, so the
+  advertised dry-run has never worked (the `jdk` / `dotnet_sdk` resolvers skip
+  their `uri` lookup and the next task fails on the undefined response), and
+  the flag cannot deliver the isolation it implies anyway - staging and the
+  host file server both run before the playbook. Idempotence is this flow's
+  safety property, proven per-role by molecule and end-to-end by 9.2.C's
+  Phase 2; `--tags` is the blast-radius control. Advertising a broken flag
+  costs a misdirected diagnosis pass.
+
+```mermaid
+flowchart LR
+  RUN[provision-toolchains.sh] --> PF[Assert-HostNetworkPreflight]
+  PF -->|FAIL: not elevated<br/>/ relay wedged| STOP[abort, actionable]
+  PF -->|PASS| STAGE[stage -> bridge -> playbook]
+```
+
 ## Section 10 - Decouple Common-Ansible from the provisioner
 
 Severs the residual substrate -> Vm-Provisioner coupling described in
