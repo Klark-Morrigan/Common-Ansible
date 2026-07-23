@@ -1,0 +1,22 @@
+---
+# Converge - bake the two commonly-paired bats libraries at pinned tags
+# via the role. bats-assert depends on bats-support at load time, so
+# installing both here also lets verify prove the pair loads together.
+# molecule idempotence re-runs this play and asserts changed: 0.
+#
+# include_role (not import_role) defers resolution to runtime so the
+# molecule.yml ANSIBLE_ROLES_PATH override is honoured.
+
+- name: Converge - install bats libraries via the section-2 get_url role
+  hosts: all
+  gather_facts: false
+  vars:
+    toolchain_bats_libs_packages:
+      - name: bats-support
+        version: "0.3.0"
+      - name: bats-assert
+        version: "2.1.0"
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: toolchain_bats_libs

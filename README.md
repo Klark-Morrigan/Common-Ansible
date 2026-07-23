@@ -25,6 +25,7 @@ was extended by the feature step that earned it.
   - [.NET SDK (dotnet_sdk)](#net-sdk-dotnet_sdk)
   - [.NET global tools (dotnet_tools)](#net-global-tools-dotnet_tools)
   - [Section-2 apt toolchain pattern (toolchain_apt)](#section-2-apt-toolchain-pattern-toolchain_apt)
+  - [Section-2 bats-libraries toolchain pattern (toolchain_bats_libs)](#section-2-bats-libraries-toolchain-pattern-toolchain_bats_libs)
   - [Section-3 Docker daemon (docker)](#section-3-docker-daemon-docker)
 - [Tests and lint](#tests-and-lint)
   - [Ansible lint gate (ci-ansible.yml)](#ansible-lint-gate-ci-ansibleyml)
@@ -383,8 +384,11 @@ Each VM definition in the provisioner config carries an optional
 {
   "vmName": "ubuntu-02-ci",
   "toolchains": {
-    "hostPushed":   [ { "name": "jdk",        "version": "21.0.2+13" } ],
-    "vmDownloaded": [ { "name": "shellcheck", "version": "0.9.0-1"  } ],
+    "hostPushed":   [ { "name": "jdk", "version": "21.0.2+13" } ],
+    "vmDownloaded": {
+      "apt":      [ { "name": "shellcheck",   "version": "0.9.0-1" } ],
+      "batsLibs": [ { "name": "bats-support", "version": "0.3.0"  } ]
+    },
     "baseImage":    [ { "name": "docker" } ]
   }
 }
@@ -393,8 +397,14 @@ Each VM definition in the provisioner config carries an optional
 - `hostPushed` - section 1: heavy artifacts the host caches once and
   pushes over the file server (JDK, .NET SDK), consumed by the
   [host-push roles](#host-push-toolchain-pattern-toolchain_host_push).
-- `vmDownloaded` - section 2: small packages the VM fetches itself,
-  consumed by [`toolchain_apt`](#section-2-apt-toolchain-pattern-toolchain_apt).
+- `vmDownloaded` - section 2: small artifacts the VM fetches itself, split
+  by install **mechanism** into two sub-lists:
+  - `apt` - distro packages (shellcheck, the bats binary), consumed by
+    [`toolchain_apt`](#section-2-apt-toolchain-pattern-toolchain_apt).
+  - `batsLibs` - bats helper libraries fetched from GitHub tag tarballs
+    (bats-support, bats-assert), consumed by
+    [`toolchain_bats_libs`](roles/toolchain_bats_libs/README.md); apt
+    cannot serve these.
 - `baseImage` - section 3: daemons installed at a coarser grain,
   consumed by the [`docker`](#section-3-docker-daemon-docker) role.
 
@@ -542,6 +552,25 @@ Its shipped use is shellcheck pinned to `0.9.0-1` (the apt candidate on the
 target's Ubuntu 24.04), which unblocks the `ci-bash` shellcheck step on the
 runner VM without a runtime install. Full var contract and the molecule
 scenario are in the [role README](roles/toolchain_apt/README.md).
+
+### Section-2 bats-libraries toolchain pattern (toolchain_bats_libs)
+
+[`roles/toolchain_bats_libs`](roles/toolchain_bats_libs/) is the second
+**section-2** mechanism - the `get_url` sibling `toolchain_apt`'s README
+anticipates for tools apt cannot serve. The bats helper libraries
+(bats-support, bats-assert, ...) ship no distro package; they are plain
+bash sources published only as `bats-core` GitHub tag tarballs. The role
+bakes each into `<base>/<name>/` at a pinned tag, idempotently, keyed off a
+`.installed-v<version>` marker so a re-run is a no-op and a pin bump
+reinstalls.
+
+It exists to remove a self-hosted-runner failure: `bats-core/bats-action`
+installs these libraries into `/usr/lib` on every CI run **using sudo**,
+which dies on a runner whose CI user has no passwordless sudo. Baking them
+once - as the privileged deploy user - lets the unprivileged CI user
+consume them read-only, and the CI action is told to skip its own library
+install. Full var contract and the molecule scenario are in the
+[role README](roles/toolchain_bats_libs/README.md).
 
 ### Section-3 Docker daemon (docker)
 

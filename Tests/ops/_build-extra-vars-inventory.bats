@@ -85,12 +85,12 @@ teardown() {
 }
 
 @test "a well-formed toolchains block rides through untouched" {
-    printf '%s' '[{"vmName":"a","toolchains":{"vmDownloaded":[{"name":"shellcheck"}]}}]' > "${PROV}"
+    printf '%s' '[{"vmName":"a","toolchains":{"vmDownloaded":{"apt":[{"name":"shellcheck"}]}}}]' > "${PROV}"
     run "${BASH_BIN}" "${SCRIPT}" --provisioner-config "${PROV}"
     [ "${status}" -eq 0 ]
     # Surfaced verbatim under the canonical key, ready for a consumer
     # playbook's per-section dispatch.
-    [ "$(printf '%s' "${output}" | jq -r '.vm_provisioner_config[0].toolchains.vmDownloaded[0].name')" = "shellcheck" ]
+    [ "$(printf '%s' "${output}" | jq -r '.vm_provisioner_config[0].toolchains.vmDownloaded.apt[0].name')" = "shellcheck" ]
 }
 
 @test "a malformed toolchains section fails the surfacing with a clear message" {

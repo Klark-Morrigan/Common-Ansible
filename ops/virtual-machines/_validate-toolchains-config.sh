@@ -5,18 +5,28 @@
 # tool a VM needs is classified by how it is acquired -
 #   hostPushed   - section 1, heavy artifacts the host caches and pushes
 #                  (JDK, .NET SDK).
-#   vmDownloaded - section 2, small packages the VM fetches itself
-#                  (shellcheck, bats).
+#   vmDownloaded - section 2, small artifacts the VM fetches itself. Split
+#                  by install *mechanism* into two sub-lists, because a
+#                  single "download it yourself" section spans more than
+#                  one installer:
+#                    apt      - distro packages (shellcheck, the bats
+#                               binary), consumed by toolchain_apt.
+#                    batsLibs - bats helper libraries fetched from GitHub
+#                               tag tarballs (bats-support, bats-assert),
+#                               consumed by toolchain_bats_libs; apt cannot
+#                               serve these.
 #   baseImage    - section 3, daemons installed at a coarser grain
 #                  (Docker).
 #
 # This validator owns only the *outer taxonomy shape* - that the block is
-# an object, that it names none but the three known sections, and that
-# each present section is a list. It deliberately does not look inside a
-# section's entries: each toolchain role validates its own slice (e.g.
-# toolchain_apt asserts every entry names a package), so entry rules stay
-# with the role that consumes them. The split keeps the substrate owning
-# the taxonomy contract and the roles owning their payload.
+# an object, that it names none but the three known sections, that
+# hostPushed and baseImage are lists, and that vmDownloaded is an object
+# whose only keys (apt, batsLibs) are each a list. It deliberately does not
+# look inside a section's entries: each toolchain role validates its own
+# slice (e.g. toolchain_apt asserts every entry names a package), so entry
+# rules stay with the role that consumes them. The split keeps the
+# substrate owning the taxonomy contract and the roles owning their
+# payload.
 #
 # The taxonomy layer is the only place a malformed *section* can be caught
 # with a clear message: by the time a consumer playbook has dispatched
@@ -49,6 +59,7 @@ _validate_toolchains_config() {
           | if ($tc | type) != "object" then
               "VM \($name): toolchains must be an object, got \($tc | type)"
             else
+              # Unknown top-level section keys.
               ( ($tc | keys_unsorted)
                   - ["hostPushed", "vmDownloaded", "baseImage"] ) as $unknown
               | ( if ($unknown | length) > 0 then
@@ -56,10 +67,37 @@ _validate_toolchains_config() {
                     + ($unknown | join(", "))
                     + "; allowed: hostPushed, vmDownloaded, baseImage"
                   else empty end ),
+                # hostPushed and baseImage are plain lists.
                 ( $tc | to_entries[]
+                  | select(.key == "hostPushed" or .key == "baseImage")
                   | select(.value | type != "array")
                   | "VM \($name): toolchains.\(.key) must be a list, "
-                    + "got \(.value | type)" )
+                    + "got \(.value | type)" ),
+                # vmDownloaded is an object of per-mechanism lists. Validate
+                # its own shape (object), that its only keys are the known
+                # mechanisms, and that each present mechanism is a list.
+                ( if ($tc | has("vmDownloaded")) then
+                    $tc.vmDownloaded as $vd
+                    | if ($vd | type) != "object" then
+                        "VM \($name): toolchains.vmDownloaded must be an "
+                        + "object with apt / batsLibs lists, got "
+                        + "\($vd | type)"
+                      else
+                        ( ($vd | keys_unsorted)
+                            - ["apt", "batsLibs"] ) as $vdUnknown
+                        | ( if ($vdUnknown | length) > 0 then
+                              "VM \($name): unknown vmDownloaded "
+                              + "mechanism(s): "
+                              + ($vdUnknown | join(", "))
+                              + "; allowed: apt, batsLibs"
+                            else empty end ),
+                          ( $vd | to_entries[]
+                            | select(.value | type != "array")
+                            | "VM \($name): "
+                              + "toolchains.vmDownloaded.\(.key) must be a "
+                              + "list, got \(.value | type)" )
+                      end
+                  else empty end )
             end
         ]
       | .[]

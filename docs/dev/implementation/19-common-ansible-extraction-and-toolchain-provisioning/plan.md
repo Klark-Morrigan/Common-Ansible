@@ -1113,23 +1113,113 @@ classDiagram
   ExtraVars --> Roles : per-section dispatch
 ```
 
-### Step 9.2 - Declare shellcheck, bats, docker on ubuntu-02-ci and re-provision
+### Step 9.2 - Wire, declare, and prove sections 2 and 3 on the runner
+
+Step 9.1 gave the taxonomy a validated shape but no consumer: the block rides
+along in `vm_provisioner_config` and nothing installs from it. These three
+sub-steps close that gap - wire the dispatch, declare the tools on the real
+runner, and prove the end state on a VM - each reviewed and committed on its
+own.
+
+#### Step 9.2.A - Wire the consumer playbook to dispatch sections 2 and 3
+
+The consumer playbook (`Infrastructure-Vm-Provisioner`
+`hyper-v/ubuntu/Ansible/playbooks/provision-toolchains.yml`) composed only the
+section-1 roles (jdk -> dotnet_sdk -> dotnet_tools). Extend it to select each
+host's `toolchains` block off `vm_provisioner_config` (matching `vmName` to
+`inventory_hostname`) and dispatch by section: `vmDownloaded` ->
+`toolchain_apt_packages` (the role is always included, a no-op when empty), and
+a `docker` entry in `baseImage` gates the `docker` role (a whole-daemon
+install).
+
+Docker group membership is deliberately NOT set here. This flow installs the
+daemon but leaves `docker_group_members` empty, because the runner service user
+(`runnerUsername`) is owned by the GitHubRunners config, not this provisioner
+secret. GitHubRunners adds its runner user to the `docker` group in its own
+flow (membership is additive), so the root-equivalent socket grant stays with
+the repo that knows the user. This refines Section 8.1's "add runner user to
+docker group": the role still can (via `docker_group_members`), but the grant
+is a consumer concern placed in GitHubRunners, not in this provisioner flow.
+
+- **Reason:** 9.1 validates the block but nothing installs from it; this is
+  the missing per-host dispatch that turns a declared taxonomy into installed
+  tools.
+- **Tests:** `ansible-playbook --syntax-check` resolves all five roles via the
+  sibling roles path; yamllint clean. The authoritative ansible-lint rule pass
+  runs in `ci-ansible` (its composer stages the substrate roles onto
+  `ANSIBLE_ROLES_PATH`). No molecule - the playbook is a thin composition and
+  each role carries its own molecule scenario.
+- **README:** Vm-Provisioner README - the toolchains-taxonomy-block section,
+  the flow file-list, the config-schema table row, and the docker-group
+  boundary.
+
+```mermaid
+flowchart LR
+  CFG[vm_provisioner_config.toolchains] --> SEL[select by vmName]
+  SEL -->|vmDownloaded| APT[toolchain_apt]
+  SEL -->|baseImage: docker| DOCK[docker role]
+```
+
+#### Step 9.2.B - Declare shellcheck, bats, docker on ubuntu-02-ci and re-provision
 
 Add the three tools to the `ubuntu-02-ci` definition in the
-`VmProvisionerConfig-Production` secret and run the toolchain flow against
-it.
+`VmProvisionerConfig-Production` secret (a `toolchains` block: `vmDownloaded`
+shellcheck + bats, `baseImage` docker) and run the toolchain flow against it.
 
 - **Reason:** Applies the work to the actual red runner.
-- **Tests:** Post-run probe on the VM: shellcheck/bats/docker present, on
-  PATH, daemon reachable, runner user in docker group.
-- **README:** Note the `ubuntu-02-ci` toolchain declaration in the
-  consumer repo's README/config docs that own the production VM
-  definitions.
+- **Tests:** Post-run probe on the VM: shellcheck/bats present and on PATH at
+  their pinned versions, the docker daemon installed and reachable
+  (`sudo docker ps`). Runner-user socket access (the `docker` group membership
+  `ci-yaml` / `ci-dotnet` need) is provisioned separately by GitHubRunners - a
+  cross-repo prerequisite for 9.3, not this flow's output.
+- **README:** Note the `ubuntu-02-ci` toolchain declaration in the consumer
+  repo's README/config docs that own the production VM definitions.
 
 ```mermaid
 flowchart LR
   SEC[(VmProvisionerConfig-Production)] -->|ubuntu-02-ci toolchains| FLOW[toolchain flow 5.5]
   FLOW --> VM[ubuntu-02-ci]
+```
+
+#### Step 9.2.C - E2E coverage for sections 2 and 3 (Infrastructure-E2E)
+
+Prove the wired flow installs sections 2/3 on a real VM. The coverage lives in
+Infrastructure-E2E (E2E is threaded through that repo + `menu.ps1`, not
+embedded in the implementing repos) and runs under `ToolchainsFlow=ansible`
+only - the PowerShell reconciler has no section-2/3 concept. Author a
+`toolchains` block on the provisioning scenario's VM1 (shellcheck `0.9.0-1`,
+bats `1.10.0-1`, docker); VM2 stays clean as the blast-radius witness proving
+the per-host `selectattr` targeting does not leak the tools onto a VM that did
+not declare them.
+
+New per-assertion files mirror the jdk/dotnet pattern (one SSH-probing,
+unit-tested file each): a `toolchain_apt` assertion (each pinned tool on the
+non-login PATH, exact `dpkg-query` version, and executable - bats runs a
+trivial `.bats`, `shellcheck --version` reports the pin), a `docker` assertion
+(CLI present, `systemctl is-active docker`, `sudo docker ps` exit 0 - as root,
+matching 9.2.A's boundary, NOT VM-admin group membership), and a "no
+section-2/3 tools on VM2" witness. Install assertions run in Phase 1 (after the
+jdk/dotnet assertions); Phase 2 re-runs the flow and re-asserts presence as the
+idempotence proof. Lifecycle is install + idempotence only - the apt and docker
+roles implement no removal, so there is no uninstall / version-change phase
+(unlike jdk/dotnet). Docker on a real VM needs no docker-in-docker molecule
+caveat.
+
+- **Reason:** The section-2/3 path had role-level molecule coverage but was
+  never exercised end-to-end on a VM (the existing E2E "toolchains" flow is
+  section-1 only); this is 9.2's verification arm.
+- **Tests:** The new assertion files plus their unit tests (mocking
+  `Invoke-SshClientCommand`), mirroring
+  `Tests/Invoke-JdkInstallAssertions.Tests.ps1`; the live run turns them green
+  against a real VM.
+- **README:** Infrastructure-E2E README - add the section-2/3 assertions to the
+  provisioning scenario's coverage list.
+
+```mermaid
+flowchart LR
+  V1[VM1: toolchains block] --> FLOW[ansible toolchain flow]
+  FLOW --> A1[assert shellcheck/bats/docker present]
+  V2[VM2: no toolchains] --> A2[assert absent - witness]
 ```
 
 ### Step 9.3 - Re-run the gates and confirm green
@@ -1149,6 +1239,92 @@ flowchart LR
   VM[ubuntu-02-ci ready] --> CB[ci-bash green]
   VM --> CY[ci-yaml green]
   VM --> CD[ci-dotnet green]
+```
+
+### Step 9.4 - Gate the Ansible flow on its host-network prerequisites
+
+The Ansible toolchain flow runs no host-side gate: `provision-toolchains.sh`
+dispatches straight into staging and the bridge, so a host whose prerequisites
+are unmet fails deep and opaquely. An unelevated run dies ~30s in, inside the
+bridge's host file server, on a bare `New-NetFirewallRule: Access is denied`;
+a wedged WSL -> host portproxy relay surfaces only as a router SSH banner
+timeout, which misdirects diagnosis onto the router or the Defender rule.
+
+The PowerShell path already owns the gate this flow lacks -
+`Assert-HostNetworkPreflight`, including a `Test-IsCurrentSessionElevated`
+check - but only `provision.ps1` and `scripts/Test-HostNetworkPreflight.ps1`
+call it, and its checks model the host <-> VM path (switch, vNIC, routes, IP
+collisions, ICS DNS) rather than the WSL -> host hop the controller depends on.
+These two sub-steps close both halves: teach the gate the relay, then put the
+flow behind the gate. Each is reviewed and committed on its own. Both land in
+Infrastructure-Vm-Provisioner, which owns the pre-flight and the wrapper.
+
+#### Step 9.4.A - Teach the pre-flight the WSL -> host relay (check + self-heal)
+
+Add a check covering the WSL -> host portproxy relay, the WSL controller's only
+path to the router, with an `iphlpsvc` restart as its auto-repair. The relay
+wedges while every piece of its config still reads correct, so the check must
+diagnose by segment rather than by inspection: the host reaching `<router>:22`
+while WSL -> `<relay>:2222` opens TCP but returns no SSH banner is the wedge
+signature. Repair honours the gate's existing `-SkipRepair` switch and its
+elevation check, matching how `Reset-IcsSharing` is already gated.
+
+- **Reason:** The relay wedge is invisible to the current checks and presents
+  as a router-unreachable error, so it costs a full misdirected diagnosis pass
+  (router, then Defender rule, then portproxy table) to reach a one-line fix.
+  Config inspection cannot find it - only the segment probe separates a wedged
+  relay from a down router, because a correct rule, listener, and firewall
+  scope are all consistent with both.
+- **Tests:** Pester unit tests mirroring
+  `Tests/PowerShell/common/network/preflight/Assert-HostNetworkPreflight.Tests.ps1`,
+  mocking the probe and service cmdlets: wedged relay -> repair fires and the
+  finding resolves; healthy relay -> no restart; `-SkipRepair` -> FAIL reported
+  with no restart; unelevated -> no restart attempted.
+- **README:** Vm-Provisioner README - add the relay check to the pre-flight's
+  documented check list. Correct the `Assert-HostNetworkPreflight` header while
+  there: it claims "Five host-side checks" and "Reads only - no Get-VM* /
+  Get-Net* mutations", but the function has grown to seven and does mutate via
+  `Reset-IcsSharing` / `Set-NetConnectionProfile`.
+
+```mermaid
+flowchart LR
+  P1[host -> router:22 OK] --> D{banner from<br/>WSL -> relay:2222?}
+  D -->|no| W[wedged relay] --> R[Restart-Service iphlpsvc]
+  D -->|yes| OK[PASS]
+```
+
+#### Step 9.4.B - Gate provision-toolchains.sh behind the pre-flight
+
+Invoke the pre-flight from `provision-toolchains.sh` before staging, so the
+flow fails in seconds with an actionable message instead of deep inside the
+bridge. Elevation is a hard prerequisite of this flow specifically - the
+bridge's host file server opens its port with `New-NetFirewallRule` - so the
+gate's existing elevation check becomes a FAIL here rather than a WARN.
+
+- **Reason:** Every prerequisite this flow needs is already checked by a gate
+  it never calls; wiring it in converts a 30s opaque failure into a one-second
+  actionable one, and is the cheaper half of 9.4 (no new detection logic).
+- **Tests:** bats for the wrapper (`Tests/` alongside the existing ops suites):
+  the pre-flight runs before staging; a non-zero pre-flight aborts before the
+  bridge and stages nothing; a passing pre-flight leaves the dispatch
+  unchanged.
+- **README:** Vm-Provisioner README "Running the flow" - add elevation and the
+  pre-flight gate to the prerequisites, which currently list only the WSL
+  controller, the populated vault, and the sibling checkout. Drop the `--check`
+  example from that section: no substrate role sets `check_mode`, so the
+  advertised dry-run has never worked (the `jdk` / `dotnet_sdk` resolvers skip
+  their `uri` lookup and the next task fails on the undefined response), and
+  the flag cannot deliver the isolation it implies anyway - staging and the
+  host file server both run before the playbook. Idempotence is this flow's
+  safety property, proven per-role by molecule and end-to-end by 9.2.C's
+  Phase 2; `--tags` is the blast-radius control. Advertising a broken flag
+  costs a misdirected diagnosis pass.
+
+```mermaid
+flowchart LR
+  RUN[provision-toolchains.sh] --> PF[Assert-HostNetworkPreflight]
+  PF -->|FAIL: not elevated<br/>/ relay wedged| STOP[abort, actionable]
+  PF -->|PASS| STAGE[stage -> bridge -> playbook]
 ```
 
 ## Section 10 - Decouple Common-Ansible from the provisioner

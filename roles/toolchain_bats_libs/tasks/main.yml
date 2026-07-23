@@ -1,0 +1,119 @@
+---
+# Install the desired section-2 bats helper libraries
+# (toolchain_bats_libs_packages) at their pinned tags on the target VM,
+# idempotently. Each library becomes <base>/<name>/ holding load.bash and
+# src/ - the layout `bats_load_library <name>` resolves against
+# BATS_LIB_PATH.
+#
+# The reconciliation is marker-driven. Every install writes a
+# .installed-v<version> file into the library directory; a matching marker
+# means "installed and current" (skip), a missing one means "absent or
+# version-bumped" (reinstall). That is what makes a re-run a genuine no-op
+# (changed: 0) while still converging on a pin change - the section-2
+# counterpart to toolchain_apt leaning on apt's own installed-state.
+#
+# An empty toolchain_bats_libs_packages skips every task below (each loops
+# an empty list), so a play can always include the role and let config
+# decide the set.
+
+# Fail loudly on a malformed entry before touching the filesystem, so a
+# config typo surfaces here naming the offending entry rather than as an
+# opaque download error later. Both fields are required: name identifies
+# the bats-core repo, version pins the tag (no distro fallback exists).
+- name: Assert each library entry names a library and pins a version
+  ansible.builtin.assert:
+    that:
+      - item.name is defined
+      - item.name | length > 0
+      - item.version is defined
+      - item.version | length > 0
+    fail_msg: >-
+      toolchain_bats_libs_packages entry must set name and version:
+      {{ item }}
+  loop: "{{ toolchain_bats_libs_packages }}"
+  loop_control:
+    label: "{{ item.name | default('<no name>') }}"
+
+# Probe the per-library version marker. The marker file name encodes the
+# desired version, so its presence answers "already at this exact pin?"
+# without reading any content. Absent -> the library is missing or pinned
+# to a different version, and every (re)install task below keys its
+# `when` off this same result.
+- name: Probe the installed-version marker for each desired library
+  ansible.builtin.stat:
+    path: >-
+      {{ toolchain_bats_libs_base_dir }}/{{ item.name }}/.installed-v{{ item.version }}
+  loop: "{{ toolchain_bats_libs_packages }}"
+  loop_control:
+    label: "{{ item.name }}-{{ item.version }}"
+  become: true
+  register: toolchain_bats_libs_markers
+
+# Clear any prior tree for a library being (re)installed, so a version
+# bump cannot leave a previous version's src/*.bash (or its stale marker)
+# behind. Absent on a fresh VM is a no-op; the `when` skips libraries
+# already at the desired pin, keeping the whole role idempotent.
+- name: Remove the prior tree for libraries being (re)installed
+  ansible.builtin.file:
+    path: "{{ toolchain_bats_libs_base_dir }}/{{ item.item.name }}"
+    state: absent
+  loop: "{{ toolchain_bats_libs_markers.results }}"
+  loop_control:
+    label: "{{ item.item.name }}-{{ item.item.version }}"
+  when: not item.stat.exists
+  become: true
+
+- name: Create the library directory
+  ansible.builtin.file:
+    path: "{{ toolchain_bats_libs_base_dir }}/{{ item.item.name }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ toolchain_bats_libs_markers.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: not item.stat.exists
+  become: true
+
+# Download and extract in one step. remote_src pulls the pinned tag
+# tarball straight onto the target - section 2: the VM fetches it itself,
+# no host staging or file server. strip-components=1 drops the GitHub
+# "<owner>-<repo>-<sha>/" top directory so load.bash and src/ land
+# directly under the library directory. Guarded by the marker so it runs
+# only on a real (re)install, never on an idempotent re-run.
+- name: Download and extract each library at its pinned tag
+  ansible.builtin.unarchive:
+    # Double-quoted with escaped line breaks (backslash-newline folds to
+    # nothing, unlike >- which would inject spaces into the URL).
+    src: "https://github.com/{{ toolchain_bats_libs_github_owner }}\
+      /{{ item.item.name }}/archive/refs/tags/v{{ item.item.version }}.tar.gz"
+    dest: "{{ toolchain_bats_libs_base_dir }}/{{ item.item.name }}"
+    remote_src: true
+    extra_opts:
+      - --strip-components=1
+    owner: root
+    group: root
+  loop: "{{ toolchain_bats_libs_markers.results }}"
+  loop_control:
+    label: "{{ item.item.name }}-{{ item.item.version }}"
+  when: not item.stat.exists
+  become: true
+
+# Stamp the installed version LAST - only after a successful extract - so
+# an interrupted install leaves no marker and the next run retries rather
+# than skipping a half-populated directory. The marker's presence is what
+# the probe above reads to make a subsequent run a no-op.
+- name: Write the installed-version marker
+  ansible.builtin.copy:
+    dest: >-
+      {{ toolchain_bats_libs_base_dir }}/{{ item.item.name }}/.installed-v{{ item.item.version }}
+    content: "{{ item.item.version }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ toolchain_bats_libs_markers.results }}"
+  loop_control:
+    label: "{{ item.item.name }}-{{ item.item.version }}"
+  when: not item.stat.exists
+  become: true

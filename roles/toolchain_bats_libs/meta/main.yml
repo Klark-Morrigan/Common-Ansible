@@ -1,0 +1,28 @@
+---
+# Role metadata. The galaxy_info block exists to satisfy ansible-lint's
+# role-name / meta-no-info rules, not to publish to Galaxy (this repo is
+# consumed via a sibling checkout - see the repo README).
+
+galaxy_info:
+  role_name: toolchain_bats_libs
+  author: Common-Ansible
+  description: >-
+    Shared section-2 VM-downloaded toolchain mechanism: install pinned
+    bats helper libraries (bats-support, bats-assert, ...) from bats-core
+    GitHub tag tarballs, idempotently. The get_url sibling of
+    toolchain_apt, for libraries apt cannot serve; baked once so a
+    self-hosted CI runner consumes them without per-run sudo.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+  galaxy_tags:
+    - system
+    - toolchain
+
+# Standalone: the role carries its whole mechanism and reads the desired
+# library set from the caller's vars. Nothing else depends on it as a meta
+# dep; consumers include it with their library list.
+dependencies: []
