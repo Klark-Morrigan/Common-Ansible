@@ -1,0 +1,42 @@
+---
+# Defaults and the input contract for the toolchain_bats_libs role.
+#
+# This role is the section-2 "VM-downloaded" get_url sibling of
+# toolchain_apt. Where that role installs tools the distro archive can
+# serve (shellcheck, the bats binary), this one installs the bats helper
+# libraries (bats-support, bats-assert, ...) - which are NOT apt packages.
+# They are plain bash sources published only as bats-core GitHub tag
+# tarballs, so apt cannot carry them and toolchain_apt's README calls for
+# exactly this get_url sibling "when a consumer first needs one".
+#
+# Why bake them onto the VM at all: the bats-core/bats-action installs
+# these libraries into /usr/lib on every CI run, and that install uses
+# sudo. A self-hosted runner whose CI user has no passwordless sudo fails
+# there. Provisioning the libraries once, as the privileged deploy user,
+# lets the unprivileged CI user consume them read-only - no per-run sudo.
+#
+# Required input: none. With the empty default below the role is a no-op,
+# so a play can always include it and let config decide what installs.
+#
+# toolchain_bats_libs_packages - the desired libraries. Each entry:
+#
+#   name     (required) bats-core library repo name, e.g. "bats-support".
+#   version  (required) the exact release tag WITHOUT the leading "v",
+#                       e.g. "0.3.0". A pin is mandatory here (unlike the
+#                       optional apt pin): these libraries ship no distro
+#                       package to fall back on, so "latest" would make a
+#                       re-provision non-reproducible - the whole reason
+#                       the role exists.
+toolchain_bats_libs_packages: []
+
+# Base directory the libraries install under - one <base>/<name>/ per
+# library. Defaults to /usr/lib to match the layout bats-core/bats-action
+# uses, so a consumer that points BATS_LIB_PATH at this base resolves the
+# libraries the same way whether they were baked here or installed by the
+# action.
+toolchain_bats_libs_base_dir: /usr/lib
+
+# GitHub owner the tarballs are fetched from. Every first-party bats
+# library lives under the bats-core org; overridable only to redirect at
+# a mirror in a restricted-egress environment.
+toolchain_bats_libs_github_owner: bats-core

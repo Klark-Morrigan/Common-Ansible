@@ -1,0 +1,96 @@
+---
+# Verify the post-converge state: each library's load.bash and version
+# marker are on disk, and a real bats run can load both libraries and use
+# an assertion from them. Idempotence (re-run reports changed: 0) is
+# checked by `molecule idempotence` in the default sequence; this file
+# asserts the state the install produced.
+
+- name: Verify - baked bats libraries are present and loadable
+  hosts: all
+  gather_facts: false
+  vars:
+    expected_libs:
+      - name: bats-support
+        version: "0.3.0"
+      - name: bats-assert
+        version: "2.1.0"
+    lib_base_dir: /usr/lib
+  tasks:
+    # On disk: load.bash is the entrypoint bats_load_library resolves, and
+    # the version marker is what makes a re-run idempotent - assert both
+    # exist for every requested library.
+    - name: Stat each library load.bash
+      ansible.builtin.stat:
+        path: "{{ lib_base_dir }}/{{ item.name }}/load.bash"
+      loop: "{{ expected_libs }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: verify_loadbash
+
+    - name: Assert every load.bash is present
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+        fail_msg: >-
+          {{ lib_base_dir }}/{{ item.item.name }}/load.bash is missing:
+          {{ item.stat }}
+      loop: "{{ verify_loadbash.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Stat each library version marker
+      ansible.builtin.stat:
+        path: >-
+          {{ lib_base_dir }}/{{ item.name }}/.installed-v{{ item.version }}
+      loop: "{{ expected_libs }}"
+      loop_control:
+        label: "{{ item.name }}-{{ item.version }}"
+      register: verify_marker
+
+    - name: Assert every version marker is present
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+        fail_msg: >-
+          the .installed-v{{ item.item.version }} marker for
+          {{ item.item.name }} is missing: {{ item.stat }}
+      loop: "{{ verify_marker.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # Loadable: the whole point of baking is that a bats run can consume the
+    # libraries. Drop a .bats that loads both (bats-assert needs bats-support
+    # first) and calls assert_success - an assertion from bats-assert that
+    # exercises bats-support's helpers underneath. Resolve them through
+    # BATS_LIB_PATH pointed at the base dir, exactly as a CI consumer would.
+    - name: Drop a .bats file that loads the baked libraries
+      ansible.builtin.copy:
+        dest: /tmp/lib-load.bats
+        mode: "0644"
+        content: |
+          setup() {
+            bats_load_library bats-support
+            bats_load_library bats-assert
+          }
+
+          @test "baked libraries load and assert" {
+            run true
+            assert_success
+          }
+
+    - name: Run the .bats file against the baked libraries
+      ansible.builtin.command: bats /tmp/lib-load.bats
+      environment:
+        BATS_LIB_PATH: "{{ lib_base_dir }}"
+      register: verify_bats_run
+      changed_when: false
+
+    - name: Assert the library-loading .bats file passed
+      ansible.builtin.assert:
+        that:
+          - verify_bats_run.rc == 0
+          - "'ok 1 baked libraries load and assert' in verify_bats_run.stdout"
+          - "'not ok' not in verify_bats_run.stdout"
+        fail_msg: >-
+          the library-loading .bats file did not run green:
+          rc={{ verify_bats_run.rc }} stdout={{ verify_bats_run.stdout }}

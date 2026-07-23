@@ -1,0 +1,55 @@
+---
+# Molecule scenario for the toolchain_bats_libs role: bake the bats helper
+# libraries (bats-support, bats-assert) onto a target at pinned tags,
+# idempotently, and prove the baked copies are actually loadable by a real
+# bats run - not merely present on disk.
+#
+# Single Ubuntu 24.04 container, Docker driver, ansible verifier. The role
+# fetches the tag tarballs from GitHub over the container's normal egress
+# (section 2: the VM downloads them itself), so no localhost fixture is
+# needed. prepare.yml installs the bats binary (the verify step needs a
+# runner to load the libraries into) and asserts the absent baseline, so
+# this one scenario covers "absent then present".
+#
+# Image: reuses the toolchain_host_push base (python3 + sudo on
+# ubuntu:24.04), same as the toolchain_apt scenarios. python3 is the
+# AnsiballZ interpreter and sudo backs the role's become. No custom
+# Dockerfile - the shared base image already carries everything this
+# scenario needs. Build it via the command in
+# Tests/molecule/toolchain_host_push/Dockerfile.
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: instance
+    image: common-ansible/toolchain-host-push-base:24.04
+    pre_build_image: true
+    command: /bin/sleep infinity
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  env:
+    # ANSIBLE_ROLES_PATH (env) wins over ansible.cfg's roles_path and
+    # propagates across every molecule phase. MOLECULE_PROJECT_DIRECTORY
+    # is the scenario dir; three levels up is the repo root, then roles/.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../../roles"
+  config_options:
+    defaults:
+      stdout_callback: yaml
+      callbacks_enabled: profile_tasks
+  inventory:
+    host_vars:
+      instance:
+        ansible_user: root
+
+verifier:
+  name: ansible

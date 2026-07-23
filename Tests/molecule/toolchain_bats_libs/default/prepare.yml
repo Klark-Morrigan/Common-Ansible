@@ -1,0 +1,49 @@
+---
+# Prepare: install the bats binary and assert the absent baseline. The
+# verify step loads the baked libraries with a real bats run, so a runner
+# must exist first - bats is not in the shared base image, so prepare pulls
+# it from the Ubuntu archive (pinned, matching the toolchain_apt scenario).
+# It also asserts the target library directories are absent, so the
+# converge's install cannot pass vacuously against a pre-populated tree.
+
+- name: Prepare - install bats and assert the libraries are absent
+  hosts: all
+  gather_facts: false
+  vars:
+    prepare_lib_dirs:
+      - /usr/lib/bats-support
+      - /usr/lib/bats-assert
+  tasks:
+    # bats is the harness the verify step needs; install it the same way
+    # the toolchain_apt bats scenario does so the container has a runner.
+    # ca-certificates is stripped from the minimal base image but a real
+    # Ubuntu 24.04 target ships it - the role fetches the libraries over
+    # HTTPS from GitHub, so the test image needs the CA bundle to verify
+    # the cert. Installed here (test setup), not baked into the shared base
+    # image the HTTP-only toolchain scenarios also use.
+    - name: Install the bats binary and CA certificates
+      ansible.builtin.apt:
+        name:
+          - "bats=1.10.0-1"
+          - ca-certificates
+        state: present
+        update_cache: true
+      become: true
+
+    - name: Stat each target library directory
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: "{{ prepare_lib_dirs }}"
+      register: prepare_lib_stat
+      become: true
+
+    - name: Assert no target library directory exists yet
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists
+        fail_msg: >-
+          {{ item.item }} already exists before converge; the absent
+          baseline this scenario relies on no longer holds.
+      loop: "{{ prepare_lib_stat.results }}"
+      loop_control:
+        label: "{{ item.item }}"
