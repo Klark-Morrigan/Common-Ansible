@@ -24,6 +24,7 @@ was extended by the feature step that earned it.
   - [JDK (jdk)](#jdk-jdk)
   - [.NET SDK (dotnet_sdk)](#net-sdk-dotnet_sdk)
   - [.NET global tools (dotnet_tools)](#net-global-tools-dotnet_tools)
+  - [PowerShell (powershell)](#powershell-powershell)
   - [Section-2 apt toolchain pattern (toolchain_apt)](#section-2-apt-toolchain-pattern-toolchain_apt)
   - [Section-2 bats-libraries toolchain pattern (toolchain_bats_libs)](#section-2-bats-libraries-toolchain-pattern-toolchain_bats_libs)
   - [Section-3 Docker daemon (docker)](#section-3-docker-daemon-docker)
@@ -532,6 +533,43 @@ teardown ordering the PowerShell children-walker guaranteed. It ports the
 reconciler's `DotnetToolsProvider`; full contract, the ordering rationale,
 and the molecule scenarios are in the
 [role README](roles/dotnet_tools/README.md).
+
+### PowerShell (powershell)
+
+[`roles/powershell`](roles/powershell/) is the third consumer of the
+host-push pattern, installing `pwsh` from Microsoft's self-contained Linux
+release tarball. It exists because CI composite actions that declare
+`shell: pwsh` need the interpreter baked into the runner image; a runner
+without it fails with a bare `pwsh: command not found` at the first step
+that runs a shell - and no PowerShell-written preflight can report
+anything better, because the preflight cannot run either.
+
+Unlike its `jdk` / `dotnet_sdk` siblings this role carries **no resolver**,
+because a PowerShell release asset name is a pure function of its version
+(`powershell-<version>-linux-<arch>.tar.gz`). There is nothing to resolve,
+so the role composes the name, asserts the version is an exact
+`major.minor.patch`, and would only pay a rate-limited `api.github.com`
+dependency for adding one. Loose pins stay one layer up: the deploying
+consumer resolves `7.6` to a concrete `7.6.4` host-side while it
+checksum-verifies and stages the tarball - the same division of labour
+`dotnet_tools` uses, for the same reason.
+
+The PowerShell specifics it composes onto the pattern are a flat extract
+(`strip_components: 0`, like the .NET SDK), a single `pwsh` symlink, and a
+telemetry + update-check opt-out profile; no `owned_files`, since
+PowerShell has no fixed config file outside its install dir. v1 installs
+one PowerShell per host.
+
+It also adds a post-install **smoke check** the tarball roles do not: it
+runs the freshly symlinked `pwsh` and asserts it reports the version just
+installed. That is the only way to catch an interpreter which extracted and
+symlinked perfectly but will not start for want of a native prerequisite
+(`libicu` above all) - a failure no stat or manifest check can see, and one
+that would otherwise surface much later as an unexplained CI break. Those
+native packages are ordinary apt content and stay the consumer's section-2
+concern; this role asserts the result rather than installing the cause.
+Full contract and the molecule scenarios are in the
+[role README](roles/powershell/README.md).
 
 ### Section-2 apt toolchain pattern (toolchain_apt)
 

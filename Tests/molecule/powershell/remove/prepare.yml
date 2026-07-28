@@ -1,0 +1,28 @@
+---
+# Prepare the uninstall scenario: bring the fixture up and install
+# PowerShell 7.6.4. Converge then desires the empty set, so the pattern
+# removes it.
+
+- name: Prepare - fixture up, then install PowerShell 7.6.4
+  hosts: all
+  gather_facts: false
+  vars:
+    fixture_port: 18853
+    fixture_stage_dir: /var/lib/powershell-fixture/srv
+    fixture_build_dir: /var/lib/powershell-fixture/build
+    fixture_versions:
+      - "7.6.4"
+    # Play-level so the shared (unprefixed) bridge var is not scoped to the
+    # include_role below (ansible-lint's no-role-prefix rule only fires on
+    # vars passed under a role task).
+    host_file_server_base_url: http://127.0.0.1:18853
+  tasks:
+    - name: Bring the fixture http server up
+      ansible.builtin.include_tasks: ../tasks/_fixture-powershell.yml
+
+    - name: Install PowerShell 7.6.4 as the baseline to be removed
+      ansible.builtin.include_role:
+        name: powershell
+      vars:
+        powershell_versions:
+          - "7.6.4"

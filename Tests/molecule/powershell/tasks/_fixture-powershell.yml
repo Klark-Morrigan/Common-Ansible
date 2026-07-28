@@ -1,0 +1,105 @@
+---
+# Shared fixture bring-up for the powershell molecule scenarios. Included
+# from each scenario's prepare.yml. One in-container python http.server on
+# 127.0.0.1 stands in for the substrate host file server, serving fake
+# PowerShell release tarballs.
+#
+# Unlike the jdk / dotnet_sdk fixtures there is NO canned upstream feed
+# here: the role composes the archive name from the version and makes no
+# upstream call, so the file server is the only thing to stand up. That
+# absence is itself part of what these scenarios verify.
+#
+# Each fake tarball carries a single `pwsh` executable stub at the archive
+# root (no wrapper dir), matching the real PowerShell tarball shape, so the
+# role's strip_components=0 lands `pwsh` at the install-dir root and the
+# single-symlink mode has a host to link.
+#
+# The stub echoes ONLY its bare version string, because the role's
+# post-install smoke check compares pwsh's trimmed stdout against the
+# version it installed. A chattier stub would fail that assertion - which
+# is the point: the fixture proves the smoke check is really running the
+# binary it just symlinked.
+#
+# Caller contract (play-level vars the includer must set):
+#   fixture_port       - tcp port the http server binds on 127.0.0.1.
+#                        Distinct per scenario so concurrent runs cannot
+#                        collide.
+#   fixture_stage_dir  - directory the http server serves from.
+#   fixture_build_dir  - scratch dir the tarball payloads are built in.
+#   fixture_versions   - list of version strings to build tarballs for.
+#                        Archive names are derived here exactly as the
+#                        role derives them, so a divergence in either
+#                        direction shows up as a 404 at converge.
+
+- name: Create the fixture build and stage directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ fixture_build_dir }}"
+    - "{{ fixture_stage_dir }}"
+
+- name: Create each version's payload directory
+  ansible.builtin.file:
+    path: "{{ fixture_build_dir }}/powershell-{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ fixture_versions }}"
+  loop_control:
+    label: "{{ item }}"
+
+# Mode 0755 mirrors the real tarball, which already ships pwsh executable -
+# the reason the role needs no exec-bit fixup after extraction. A 0644 stub
+# here would make the scenarios pass for the wrong reason.
+- name: Stage the pwsh host stub in each payload
+  ansible.builtin.copy:
+    dest: "{{ fixture_build_dir }}/powershell-{{ item }}/pwsh"
+    content: |
+      #!/bin/sh
+      echo "{{ item }}"
+    mode: "0755"
+  loop: "{{ fixture_versions }}"
+  loop_control:
+    label: "{{ item }}"
+
+# tar the `pwsh` file directly (no -C into a wrapper dir kept in the
+# archive) so the archive root holds `pwsh` - the flat strip_components=0
+# shape the real tarball uses. `creates` makes the build idempotent and
+# satisfies no-changed-when.
+- name: Build a fake PowerShell tarball per version  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    argv:
+      - tar
+      - -C
+      - "{{ fixture_build_dir }}/powershell-{{ item }}"
+      - -czf
+      - "{{ fixture_stage_dir }}/powershell-{{ item }}-linux-x64.tar.gz"
+      - pwsh
+    creates: "{{ fixture_stage_dir }}/powershell-{{ item }}-linux-x64.tar.gz"
+  loop: "{{ fixture_versions }}"
+  loop_control:
+    label: "{{ item }}"
+
+# nohup + & detaches the listener so molecule's prepare phase can complete
+# and converge can proceed. Redirecting stdout/stderr to a log keeps the
+# connection plugin's channel free of background-process output.
+- name: Start python http.server serving the staging directory
+  ansible.builtin.shell:
+    cmd: >-
+      nohup python3 -m http.server {{ fixture_port }}
+      --bind 127.0.0.1
+      --directory {{ fixture_stage_dir }}
+      >/var/log/powershell-fixture-http.log 2>&1 &
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+# Tight wait-for so a server that died at startup (port in use, etc.)
+# fails prepare loudly rather than letting converge hit a
+# connection-refused get_url and obscure the root cause.
+- name: Wait for the fixture http server to accept connections
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ fixture_port }}"
+    timeout: 10

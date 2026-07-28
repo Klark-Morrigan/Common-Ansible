@@ -1,0 +1,138 @@
+---
+# powershell role entry point. Thinner than its jdk / dotnet_sdk siblings
+# because a PowerShell archive name is derivable from its version, so
+# there is no upstream resolve step at all:
+#   1. Validate the v1 single-version cap and the exact-version contract.
+#   2. Compose the toolchain_host_push desired set by splicing each
+#      version into the archive name.
+#   3. Delegate install / swap / uninstall to that role.
+#   4. Smoke-check the installed interpreter actually runs.
+#
+# An empty powershell_versions composes an empty desired set, so the
+# pattern uninstalls every version it has installed - the same
+# set-difference removal it gives every tool. The compose loop is empty
+# in that case, so an uninstall-only run validates nothing and needs no
+# network.
+
+# v1 hard cap - see defaults/main.yml for why one PowerShell per host.
+# The message names the observed count so an operator editing the list
+# does not have to recount it.
+- name: Assert at most one PowerShell version is desired
+  ansible.builtin.assert:
+    that:
+      - powershell_versions | length <= 1
+    fail_msg: >-
+      powershell_versions supports one PowerShell per host in v1; got
+      {{ powershell_versions | length }} entries.
+
+# The archive name is composed, not resolved, so a loose pin would
+# compose a URL that does not exist and fail later as an opaque 404
+# from the file server. Reject it here instead, naming the offending
+# value and the shape required. The deploying consumer is what resolves
+# "7.6" to "7.6.4" (host-side, while staging the verified tarball) -
+# see defaults/main.yml.
+- name: Assert each desired version is an exact major.minor.patch
+  ansible.builtin.assert:
+    that:
+      - item is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+    fail_msg: >-
+      powershell_versions entry '{{ item }}' is not an exact version.
+      This role composes the release archive name from the version, so
+      it requires major.minor.patch (e.g. '7.6.4') - not a loose pin
+      ('7', '7.6'), a tag ('v7.6.4'), or a prerelease.
+  loop: "{{ powershell_versions }}"
+  loop_control:
+    label: "{{ item }}"
+
+# Compose the host-push desired set, one entry per desired version. The
+# PowerShell-specific mechanics:
+#   archive: Microsoft's release asset name, the same string the
+#     deploying consumer stages the verified tarball under.
+#   strip_components: 0 - the tarball lays pwsh and its assemblies at
+#     the archive root, like the .NET SDK and unlike Adoptium's
+#     jdk-<version>/ wrapper dir.
+#   symlinks: one link for the pwsh host. Everything PowerShell runs
+#     goes through it, so there is no per-launcher enumeration as there
+#     is for the JDK. The tarball already ships pwsh mode 0755, so no
+#     exec-bit fixup is needed on top of the extract.
+#   profile: the telemetry and update-check opt-outs. Both are the
+#     unattended-runner posture dotnet_sdk takes for
+#     DOTNET_CLI_TELEMETRY_OPTOUT - there is no operator present to
+#     consent to telemetry, and the update banner is noise in a log.
+#     NOTE this reaches LOGIN shells only. A CI step's `shell: pwsh`
+#     does not read /etc/profile.d, so a runner that wants these in
+#     its job environment sets them in its own service environment;
+#     that is the consuming layer's concern, not this role's.
+#   owned_files: none - PowerShell needs no fixed config file outside
+#     its install dir (the .NET SDK's /etc/dotnet/install_location has
+#     no PowerShell equivalent).
+- name: Build the host-push desired set from the desired versions
+  ansible.builtin.set_fact:
+    powershell_final_versions: "{{ powershell_final_versions | default([]) + [entry] }}"
+  loop: "{{ powershell_versions }}"
+  loop_control:
+    loop_var: powershell_version
+    label: "{{ powershell_version }}"
+  vars:
+    entry:
+      version: "{{ powershell_version }}"
+      archive: >-
+        powershell-{{ powershell_version }}-linux-{{
+        powershell_architecture }}.tar.gz
+      strip_components: 0
+      symlinks:
+        - name: pwsh
+          source: pwsh
+      profile: |
+        export POWERSHELL_TELEMETRY_OPTOUT=1
+        export POWERSHELL_UPDATECHECK=Off
+
+- name: Reconcile PowerShell via the host-push toolchain pattern
+  ansible.builtin.include_role:
+    name: toolchain_host_push
+  vars:
+    toolchain_host_push_name: powershell
+    toolchain_host_push_install_base: "{{ powershell_install_base }}"
+    toolchain_host_push_versions: "{{ powershell_final_versions | default([]) }}"
+
+# Smoke-check the interpreter, not just the files. A pwsh that extracted
+# and symlinked cleanly can still fail to start when a native
+# prerequisite is absent (libicu is the usual one), and no stat or
+# manifest check would see it. Running the binary is the only honest
+# proof, and doing it here - at provision time - is what stops the
+# failure surfacing later as an unexplained CI break.
+#
+# Guarded on a non-empty desired set so an uninstall-only run does not
+# try to execute what it just removed. -NoProfile keeps the check
+# independent of any profile script on the box; changed_when: false
+# because reading a version mutates nothing.
+- name: Run the installed pwsh to confirm the interpreter starts
+  ansible.builtin.command:
+    argv:
+      - pwsh
+      - -NoProfile
+      - -NonInteractive
+      - -Command
+      - $PSVersionTable.PSVersion.ToString()
+  become: true
+  changed_when: false
+  register: powershell_smoke
+  when:
+    - powershell_verify_runtime | bool
+    - powershell_versions | length > 0
+
+# Assert separately from the run so a non-zero exit reports the
+# interpreter's own stderr (the missing-library message) rather than
+# being masked by a version-string mismatch.
+- name: Assert pwsh reports the version that was installed
+  ansible.builtin.assert:
+    that:
+      - powershell_smoke.stdout | trim == powershell_versions | first
+    fail_msg: >-
+      pwsh started but reports version
+      '{{ powershell_smoke.stdout | trim }}', not the installed
+      '{{ powershell_versions | first }}'. A different PowerShell
+      earlier on PATH is the usual cause.
+  when:
+    - powershell_verify_runtime | bool
+    - powershell_versions | length > 0

@@ -1,0 +1,19 @@
+---
+# Converge - desire the empty set where prepare installed 7.6.4. With no
+# entries the compose loop is empty, so the pattern receives an empty
+# desired set, finds 7.6.4 installed and stale, and removes it entirely.
+# The role's smoke check is guarded on a non-empty desired set, so it skips
+# here rather than trying to run the pwsh that was just deleted - the case
+# verify.yml pins below. host_file_server_base_url is unused (nothing to
+# install) but set for contract clarity.
+
+- name: Converge - remove all PowerShell versions (empty desired set)
+  hosts: all
+  gather_facts: false
+  vars:
+    host_file_server_base_url: http://127.0.0.1:18853
+    powershell_versions: []
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: powershell

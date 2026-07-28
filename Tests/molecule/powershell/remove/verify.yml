@@ -1,0 +1,42 @@
+---
+# Verify the post-remove state: every PowerShell 7.6.4 artefact is gone.
+# Covers the uninstall case at the powershell-role level (an empty desired
+# set driving the pattern's set-difference removal).
+#
+# The absent /usr/local/bin/pwsh doubles as proof the role's smoke check was
+# SKIPPED rather than run: had the guard on a non-empty desired set been
+# missing, the converge would have failed trying to execute a symlink whose
+# target no longer exists, and this play would never have run.
+
+- name: Verify - PowerShell removal post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    manifest_path: /var/lib/common-ansible/toolchains/manifests/powershell-7.6.4.json
+  tasks:
+    - name: Stat every artifact the install owned
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: artifacts
+      loop:
+        - /opt/powershell-7.6.4
+        - /usr/local/bin/pwsh
+        - /etc/profile.d/powershell.sh
+        - "{{ manifest_path }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Assert every PowerShell artifact was removed
+      ansible.builtin.assert:
+        that:
+          - >-
+            (artifacts.results | map(attribute='stat.exists') | list)
+            == [false, false, false, false]
+        fail_msg: >-
+          One or more PowerShell artifacts survived removal:
+          {{
+            dict(
+              artifacts.results | map(attribute='item')
+              | zip(artifacts.results | map(attribute='stat.exists'))
+            )
+          }}

@@ -123,7 +123,8 @@ on:
         description: >-
           Set true for a substrate-only composer: a caller whose playbook
           statically `import_role`s the Common-Ansible substrate roles
-          (jdk, dotnet_sdk, dotnet_tools) and ships no roles of its own.
+          (jdk, dotnet_sdk, dotnet_tools, powershell) and ships no roles of
+          its own.
           It puts the staged substrate `roles/` on ANSIBLE_ROLES_PATH so
           ansible-lint's syntax-check can resolve those roles. Leave false
           (the default) for an own-roles caller, whose root ansible.cfg
@@ -157,7 +158,8 @@ on:
         description: >-
           Set true for a substrate-only composer: a caller whose playbook
           statically `import_role`s the Common-Ansible substrate roles
-          (jdk, dotnet_sdk, dotnet_tools) and ships no roles of its own.
+          (jdk, dotnet_sdk, dotnet_tools, powershell) and ships no roles of
+          its own.
           It puts the staged substrate `roles/` on ANSIBLE_ROLES_PATH so
           ansible-lint's syntax-check can resolve those roles. Leave false
           (the default) for an own-roles caller, whose root ansible.cfg
@@ -232,7 +234,7 @@ jobs:
       # Substrate-composer roles resolution. A substrate-only composer
       # (e.g. Vm-Provisioner) ships no roles of its own: its playbook
       # statically `import_role`s the substrate roles (jdk, dotnet_sdk,
-      # dotnet_tools). Because import_role is static, ansible-lint's
+      # dotnet_tools, powershell). Because import_role is static, ansible-lint's
       # syntax-check must resolve those roles at lint time, so the staged
       # substrate roles/ have to be on the path. This is the ONE case where
       # exporting ANSIBLE_ROLES_PATH is correct: the composer has no

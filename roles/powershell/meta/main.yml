@@ -1,0 +1,27 @@
+---
+# Role metadata for the powershell role. Kept minimal - galaxy_info is
+# present so ansible-lint's role-metadata checks pass and the role is
+# self-describing without implying this repo publishes to Galaxy (it does
+# not; consumers take a sibling checkout - see the repo README "Consuming
+# the substrate").
+galaxy_info:
+  role_name: powershell
+  author: Infrastructure
+  description: >-
+    Install / swap / uninstall PowerShell (pwsh) from Microsoft's
+    self-contained Linux release tarball via the host-push toolchain
+    pattern.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+
+# This role delegates its install/uninstall mechanics to
+# toolchain_host_push via include_role at runtime (tasks/main.yml), not a
+# meta dependency: a meta dependency would run toolchain_host_push's tasks
+# BEFORE this role composes the desired set it must pass in. The include
+# is the correct ordering seam. Same reasoning as the jdk and dotnet_sdk
+# roles.
+dependencies: []
