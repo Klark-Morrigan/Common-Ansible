@@ -6,6 +6,13 @@
 # symlinked stub, so a converge that reaches the end has already proved the
 # interpreter starts.
 #
+# No scenario overrides powershell_native_packages, so every one of them
+# runs the real apt prerequisite install exactly as production does - the
+# same real-apt posture the toolchain_apt scenario takes. That is also what
+# lets `molecule idempotence` prove the apt tasks are no-ops on a re-run
+# (cache refresh throttled, package already at state present); overriding
+# the list to [] would have silently dropped that coverage.
+#
 # include_role (not import_role) defers resolution to runtime so the
 # molecule.yml ANSIBLE_ROLES_PATH override is honoured.
 

@@ -581,15 +581,23 @@ telemetry + update-check opt-out profile; no `owned_files`, since
 PowerShell has no fixed config file outside its install dir. v1 installs
 one PowerShell per host.
 
+The tarball carries its own .NET runtime but **not** the platform's ICU
+libraries, without which `pwsh` will not start (a stock `ubuntu:24.04` has
+no ICU at all). The role installs them itself, from an overridable
+`powershell_native_packages`, rather than routing them through the
+consumer's [section-2](#section-2---vm-downloaded-toolchains) apt
+declaration: that list is operator-chosen desired state, and there is no
+configuration in which you want PowerShell and not ICU. The `docker` role
+draws the same line with its own apt prerequisites.
+
 It also adds a post-install **smoke check** the tarball roles do not: it
 runs the freshly symlinked `pwsh` and asserts it reports the version just
-installed. That is the only way to catch an interpreter which extracted and
-symlinked perfectly but will not start for want of a native prerequisite
-(`libicu` above all) - a failure no stat or manifest check can see, and one
-that would otherwise surface much later as an unexplained CI break. Those
-native packages are ordinary apt content and stay a
-[section-2](#section-2---vm-downloaded-toolchains) concern; this role
-asserts the result rather than installing the cause.
+installed. That catches an interpreter which extracted and symlinked
+perfectly but will not start - a wrong-architecture tarball, a truncated
+extract, or a prerequisite the package list missed because the target's
+distro moved on (the ICU package name is release-specific). No stat or
+manifest check sees any of those, and untreated they surface much later as
+an unexplained CI break.
 Full contract and the molecule scenarios are in the
 [role README](roles/powershell/README.md).
 

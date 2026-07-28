@@ -5,8 +5,9 @@
 #   1. Validate the v1 single-version cap and the exact-version contract.
 #   2. Compose the toolchain_host_push desired set by splicing each
 #      version into the archive name.
-#   3. Delegate install / swap / uninstall to that role.
-#   4. Smoke-check the installed interpreter actually runs.
+#   3. Install the native libraries the tarball omits (ICU).
+#   4. Delegate install / swap / uninstall to that role.
+#   5. Smoke-check the installed interpreter actually runs.
 #
 # An empty powershell_versions composes an empty desired set, so the
 # pattern uninstalls every version it has installed - the same
@@ -87,6 +88,39 @@
         export POWERSHELL_TELEMETRY_OPTOUT=1
         export POWERSHELL_UPDATECHECK=Off
 
+# Native prerequisites BEFORE the install, not after: the tarball ships
+# its own .NET runtime but not the platform's ICU, and pwsh aborts at
+# startup without it. Getting them in first means the smoke check at the
+# end is testing the interpreter rather than re-discovering a missing
+# library. See defaults/main.yml for why this role installs them rather
+# than delegating to the consumer's apt declaration.
+#
+# Both guards matter: the uninstall direction (empty desired set) must not
+# install prerequisites for something it is removing, and an image that
+# already bakes them sets the package list empty.
+- name: Update the apt cache before installing native prerequisites (throttled)
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: "{{ powershell_apt_cache_valid_time }}"
+  become: true
+  when:
+    - powershell_versions | length > 0
+    - powershell_native_packages | length > 0
+
+# One transaction, state present - apt is its own installed-state source
+# of truth, so an already-present library is unchanged on re-run and the
+# role stays idempotent. update_cache is false because the throttled task
+# above owns that; refreshing again would defeat the throttle.
+- name: Install the native prerequisites the PowerShell tarball omits
+  ansible.builtin.apt:
+    name: "{{ powershell_native_packages }}"
+    state: present
+    update_cache: false
+  become: true
+  when:
+    - powershell_versions | length > 0
+    - powershell_native_packages | length > 0
+
 - name: Reconcile PowerShell via the host-push toolchain pattern
   ansible.builtin.include_role:
     name: toolchain_host_push
@@ -96,11 +130,13 @@
     toolchain_host_push_versions: "{{ powershell_final_versions | default([]) }}"
 
 # Smoke-check the interpreter, not just the files. A pwsh that extracted
-# and symlinked cleanly can still fail to start when a native
-# prerequisite is absent (libicu is the usual one), and no stat or
-# manifest check would see it. Running the binary is the only honest
-# proof, and doing it here - at provision time - is what stops the
-# failure surfacing later as an unexplained CI break.
+# and symlinked cleanly can still fail to start - a wrong-architecture
+# tarball, a truncated extract, or a native prerequisite this role's
+# package list did not cover (the list is release-specific, so a distro
+# bump is exactly when it goes stale). No stat or manifest check would
+# see any of that. Running the binary is the only honest proof, and doing
+# it here - at provision time - is what stops the failure surfacing later
+# as an unexplained CI break.
 #
 # Guarded on a non-empty desired set so an uninstall-only run does not
 # try to execute what it just removed. -NoProfile keeps the check

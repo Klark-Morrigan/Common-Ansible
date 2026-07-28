@@ -13,6 +13,7 @@ third consumer of that pattern, alongside
 - [Var contract](#var-contract)
 - [Why there is no resolver](#why-there-is-no-resolver)
 - [What the install lays down](#what-the-install-lays-down)
+- [Native prerequisites](#native-prerequisites)
 - [Runtime smoke check](#runtime-smoke-check)
 - [Consuming this role](#consuming-this-role)
 - [Tests](#tests)
@@ -39,6 +40,11 @@ Full field documentation lives in
   name; `arm64` is the other value Microsoft publishes.
 - `powershell_install_base` (default `/opt`) - forwarded to
   `toolchain_host_push` as the install-dir base.
+- `powershell_native_packages` (default `[libicu74]`) - the apt packages
+  the tarball omits and the interpreter cannot start without. See
+  [Native prerequisites](#native-prerequisites); empty skips the install.
+- `powershell_apt_cache_valid_time` (default `3600`) - throttle for the
+  cache refresh preceding that install, so a re-run is a genuine no-op.
 - `powershell_verify_runtime` (default `true`) - run the
   [smoke check](#runtime-smoke-check) after install.
 - `host_file_server_base_url` (bridge-supplied, required when installing)
@@ -98,13 +104,48 @@ not reach it. A runner that wants them in its job environment sets them in
 its own service environment - that is the consuming layer's concern, not
 this role's.
 
+## Native prerequisites
+
+The tarball is self-contained in the sense that matters most - it carries
+its own .NET runtime, so the target needs no SDK - but it does **not**
+ship the platform's ICU libraries, and `pwsh` will not start without
+them. On a stock `ubuntu:24.04` there is no ICU at all:
+
+```text
+$ /opt/powershell-7.6.4/pwsh --version
+Process terminated. Couldn't find a valid ICU package installed on the
+system. Please install libicu (or icu-libs) using your package manager
+and try again.
+```
+
+So the role installs them, from `powershell_native_packages` (default
+`libicu74`), before the tarball install. They are deliberately **not**
+left to the consumer's section-2 `toolchain_apt` declaration: that list
+is desired state, an operator choice, and there is no configuration in
+which you want PowerShell and not ICU. Routing a hard prerequisite
+through it would make every consuming VM re-derive the same requirement
+and hard-fail when it forgot. The [`docker`](../docker/README.md) role
+draws the same line with its own apt prerequisites.
+
+The package name is release-specific - `libicu74` on Ubuntu 24.04,
+`libicu70` on 22.04 - which is why it is a var rather than hardcoded. A
+distro bump is a one-line override, and the
+[smoke check](#runtime-smoke-check) below fails loudly and quotably if it
+is ever wrong. There is no unversioned alias to depend on instead: Ubuntu
+publishes no virtual `libicu` package, and `libicu-dev` would drag in
+headers a runtime host has no use for.
+
+Set `powershell_native_packages: []` for an image that already bakes
+them.
+
 ## Runtime smoke check
 
 After the install, the role runs the symlinked `pwsh` and asserts it
 reports the version just installed. This covers the one failure mode no
 file-level check can see: an interpreter that extracted and symlinked
-perfectly but will not **start**, almost always because a native
-prerequisite is missing (`libicu` above all others).
+perfectly but will not **start** - a wrong-architecture tarball, a
+truncated extract, or a native prerequisite the package list above did
+not cover (which is precisely what a distro bump causes).
 
 Catching that at provision time is the whole point. The alternative is a
 runner that provisions "successfully" and then breaks a CI job later with
@@ -130,12 +171,8 @@ interpreter is impossible - e.g. a cross-architecture staging host.
       - "7.6.4"
 ```
 
-Native prerequisites (`libicu` and friends) are **not** installed here.
-They are ordinary apt packages, so they belong in the consumer's
-section-2 declaration, which
-[`toolchain_apt`](../toolchain_apt/README.md) reconciles. This role
-asserts the result instead of installing the cause - the same boundary
-`toolchain_host_push` draws everywhere else: one role, one mechanism.
+Native prerequisites are installed by this role, not left to the
+consumer. See [Native prerequisites](#native-prerequisites).
 
 ## Tests
 
