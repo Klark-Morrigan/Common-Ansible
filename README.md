@@ -20,14 +20,17 @@ was extended by the feature step that earned it.
 - [Bridge contract](#bridge-contract)
   - [The toolchains taxonomy block (vm_provisioner_config.toolchains)](#the-toolchains-taxonomy-block-vm_provisioner_configtoolchains)
 - [Reusable roles](#reusable-roles)
-  - [Host-push toolchain pattern (toolchain_host_push)](#host-push-toolchain-pattern-toolchain_host_push)
-  - [JDK (jdk)](#jdk-jdk)
-  - [.NET SDK (dotnet_sdk)](#net-sdk-dotnet_sdk)
-  - [.NET global tools (dotnet_tools)](#net-global-tools-dotnet_tools)
-  - [PowerShell (powershell)](#powershell-powershell)
-  - [Section-2 apt toolchain pattern (toolchain_apt)](#section-2-apt-toolchain-pattern-toolchain_apt)
-  - [Section-2 bats-libraries toolchain pattern (toolchain_bats_libs)](#section-2-bats-libraries-toolchain-pattern-toolchain_bats_libs)
-  - [Section-3 Docker daemon (docker)](#section-3-docker-daemon-docker)
+  - [Section 1 - host-pushed toolchains](#section-1---host-pushed-toolchains)
+    - [Host-push toolchain pattern (toolchain_host_push)](#host-push-toolchain-pattern-toolchain_host_push)
+    - [JDK (jdk)](#jdk-jdk)
+    - [.NET SDK (dotnet_sdk)](#net-sdk-dotnet_sdk)
+    - [.NET global tools (dotnet_tools)](#net-global-tools-dotnet_tools)
+    - [PowerShell (powershell)](#powershell-powershell)
+  - [Section 2 - VM-downloaded toolchains](#section-2---vm-downloaded-toolchains)
+    - [apt toolchain pattern (toolchain_apt)](#apt-toolchain-pattern-toolchain_apt)
+    - [bats-libraries toolchain pattern (toolchain_bats_libs)](#bats-libraries-toolchain-pattern-toolchain_bats_libs)
+  - [Section 3 - base-image daemons](#section-3---base-image-daemons)
+    - [Docker daemon (docker)](#docker-daemon-docker)
 - [Tests and lint](#tests-and-lint)
   - [Ansible lint gate (ci-ansible.yml)](#ansible-lint-gate-ci-ansibleyml)
 - [Consuming the substrate](#consuming-the-substrate)
@@ -396,18 +399,19 @@ Each VM definition in the provisioner config carries an optional
 ```
 
 - `hostPushed` - section 1: heavy artifacts the host caches once and
-  pushes over the file server (JDK, .NET SDK), consumed by the
-  [host-push roles](#host-push-toolchain-pattern-toolchain_host_push).
+  pushes over the file server (JDK, .NET SDK, PowerShell), consumed by the
+  [section-1 roles](#section-1---host-pushed-toolchains).
 - `vmDownloaded` - section 2: small artifacts the VM fetches itself, split
-  by install **mechanism** into two sub-lists:
+  by install **mechanism** into two sub-lists, one per
+  [section-2 role](#section-2---vm-downloaded-toolchains):
   - `apt` - distro packages (shellcheck, the bats binary), consumed by
-    [`toolchain_apt`](#section-2-apt-toolchain-pattern-toolchain_apt).
+    [`toolchain_apt`](#apt-toolchain-pattern-toolchain_apt).
   - `batsLibs` - bats helper libraries fetched from GitHub tag tarballs
     (bats-support, bats-assert), consumed by
-    [`toolchain_bats_libs`](roles/toolchain_bats_libs/README.md); apt
-    cannot serve these.
+    [`toolchain_bats_libs`](#bats-libraries-toolchain-pattern-toolchain_bats_libs);
+    apt cannot serve these.
 - `baseImage` - section 3: daemons installed at a coarser grain,
-  consumed by the [`docker`](#section-3-docker-daemon-docker) role.
+  consumed by the [`docker`](#docker-daemon-docker) role.
 
 The block lives in the existing per-VM secret (one per-VM SSOT); the
 config is surfaced whole under `vm_provisioner_config`, so the block rides
@@ -454,10 +458,27 @@ their short name once `<root>/roles` is on `ANSIBLE_ROLES_PATH` (see
 [Consuming the substrate](#consuming-the-substrate)). Roles read the
 extra-vars and inventory the bridge composes and are not standalone.
 
-### Host-push toolchain pattern (toolchain_host_push)
+They are grouped below by the same three-section acquisition taxonomy the
+[`toolchains` config block](#the-toolchains-taxonomy-block-vm_provisioner_configtoolchains)
+uses - **how** each tool reaches the target, which is what decides a role's
+shape far more than what it installs. Within a section the roles share a
+mechanism (and, in section 1, a literal shared pattern role); across
+sections they share almost nothing.
+
+### Section 1 - host-pushed toolchains
+
+Heavy artifacts the host fetches, verifies, and serves once over the file
+server. Every role here delegates its install / swap / uninstall mechanics
+to the shared [`toolchain_host_push`](#host-push-toolchain-pattern-toolchain_host_push)
+pattern and adds only its own version logic - except `dotnet_tools`, which
+is host-pushed but installs via the `dotnet tool` driver rather than a
+tarball extract, so it mirrors the pattern's manifest reconcile instead of
+delegating to it.
+
+#### Host-push toolchain pattern (toolchain_host_push)
 
 [`roles/toolchain_host_push`](roles/toolchain_host_push/) is the shared
-**section-1** ("host-prefetched, pushed") toolchain mechanism: it pulls a
+mechanism the rest of this section builds on: it pulls a
 host-staged tarball via the substrate host file server, extracts it to a
 versioned install dir (`/opt/<tool>-<version>`), wires `/usr/local/bin`
 symlinks and an `/etc/profile.d/<tool>.sh` script, records each install as
@@ -487,7 +508,7 @@ its install dir (e.g. .NET's `/etc/dotnet/install_location`): the pattern
 writes it at install and removes it on uninstall, recording the path in the
 manifest so removal stays glob-free too.
 
-### JDK (jdk)
+#### JDK (jdk)
 
 [`roles/jdk`](roles/jdk/) is the first real consumer of the host-push
 pattern. It adds **only** Adoptium (Eclipse Temurin) version-pin
@@ -500,7 +521,7 @@ installs one JDK per host. It ports the PowerShell reconciler's
 `JdkProvider`; full contract, the resolution table, and the molecule
 scenarios are in the [role README](roles/jdk/README.md).
 
-### .NET SDK (dotnet_sdk)
+#### .NET SDK (dotnet_sdk)
 
 [`roles/dotnet_sdk`](roles/dotnet_sdk/) is the second real consumer of the
 host-push pattern. It adds **only** .NET release-feed resolution: an
@@ -516,7 +537,7 @@ installs one SDK per host. It ports the PowerShell reconciler's
 `DotnetSdkProvider`; full contract, the resolution table, and the molecule
 scenarios are in the [role README](roles/dotnet_sdk/README.md).
 
-### .NET global tools (dotnet_tools)
+#### .NET global tools (dotnet_tools)
 
 [`roles/dotnet_tools`](roles/dotnet_tools/) is the nested global-tools half
 of the .NET toolchain (the SDK half is `dotnet_sdk`). Unlike the tarball
@@ -534,7 +555,7 @@ reconciler's `DotnetToolsProvider`; full contract, the ordering rationale,
 and the molecule scenarios are in the
 [role README](roles/dotnet_tools/README.md).
 
-### PowerShell (powershell)
+#### PowerShell (powershell)
 
 [`roles/powershell`](roles/powershell/) is the third consumer of the
 host-push pattern, installing `pwsh` from Microsoft's self-contained Linux
@@ -566,20 +587,25 @@ installed. That is the only way to catch an interpreter which extracted and
 symlinked perfectly but will not start for want of a native prerequisite
 (`libicu` above all) - a failure no stat or manifest check can see, and one
 that would otherwise surface much later as an unexplained CI break. Those
-native packages are ordinary apt content and stay the consumer's section-2
-concern; this role asserts the result rather than installing the cause.
+native packages are ordinary apt content and stay a
+[section-2](#section-2---vm-downloaded-toolchains) concern; this role
+asserts the result rather than installing the cause.
 Full contract and the molecule scenarios are in the
 [role README](roles/powershell/README.md).
 
-### Section-2 apt toolchain pattern (toolchain_apt)
+### Section 2 - VM-downloaded toolchains
 
-[`roles/toolchain_apt`](roles/toolchain_apt/) is the shared **section-2**
-("VM-downloaded") toolchain mechanism - the counterpart to the section-1
-host-push pattern. Small distro packages (shellcheck, bats) are not worth
-host-staging and pushing over the file server: apt on the target fetches
-them itself over its normal egress, and apt is already the installed-state
-source of truth, giving idempotent install and removal for free. So the
-role is deliberately thin - no host staging, no file server, no manifest.
+Small artifacts not worth host-staging: the VM fetches them itself over its
+normal egress. No file server, no staging, no manifest - the fetching tool
+is already the installed-state source of truth. The two roles here split by
+install **mechanism**, because apt cannot serve everything section 2 needs.
+
+#### apt toolchain pattern (toolchain_apt)
+
+[`roles/toolchain_apt`](roles/toolchain_apt/) installs distro packages
+(shellcheck, the bats binary). It is deliberately thin, because apt is
+already the installed-state source of truth and gives idempotent install
+and removal for free.
 It installs a set of `{name, version}` entries in one apt transaction at
 `state: present` with `allow_downgrade`, so an exact pin is authoritative
 and re-provision-safe. The one task that could report a spurious change,
@@ -591,11 +617,11 @@ target's Ubuntu 24.04), which unblocks the `ci-bash` shellcheck step on the
 runner VM without a runtime install. Full var contract and the molecule
 scenario are in the [role README](roles/toolchain_apt/README.md).
 
-### Section-2 bats-libraries toolchain pattern (toolchain_bats_libs)
+#### bats-libraries toolchain pattern (toolchain_bats_libs)
 
-[`roles/toolchain_bats_libs`](roles/toolchain_bats_libs/) is the second
-**section-2** mechanism - the `get_url` sibling `toolchain_apt`'s README
-anticipates for tools apt cannot serve. The bats helper libraries
+[`roles/toolchain_bats_libs`](roles/toolchain_bats_libs/) is the `get_url`
+sibling `toolchain_apt`'s README anticipates for tools apt cannot serve.
+The bats helper libraries
 (bats-support, bats-assert, ...) ship no distro package; they are plain
 bash sources published only as `bats-core` GitHub tag tarballs. The role
 bakes each into `<base>/<name>/` at a pinned tag, idempotently, keyed off a
@@ -610,21 +636,23 @@ consume them read-only, and the CI action is told to skip its own library
 install. Full var contract and the molecule scenario are in the
 [role README](roles/toolchain_bats_libs/README.md).
 
-### Section-3 Docker daemon (docker)
+### Section 3 - base-image daemons
 
-[`roles/docker`](roles/docker/) is the **section-3** ("base-image /
-daemon") toolchain mechanism - the counterpart to the section-1 host-push
-and section-2 apt patterns. A daemon is a rarely-versioned service, so it
-is installed at a coarser grain: Docker's own apt repo (GPG key in a
+Services installed at a coarser grain than a pinned version, from the
+vendor's own repo. Named for where they would live if this estate had a
+golden-image pipeline; it does not, so an Ansible role stands in.
+
+#### Docker daemon (docker)
+
+[`roles/docker`](roles/docker/) installs the Docker daemon: Docker's own
+apt repo (GPG key in a
 dedicated keyring, `signed-by`-scoped so it authorises only Docker's
 source), the Docker CE engine package set, the `docker` systemd service
 enabled and started, and the runner service user added to the `docker`
 group so it reaches the socket without sudo. Group membership is the one
 var a consumer normally sets (`docker_group_members`); it is additive and,
 because the group is root-equivalent, deliberately opt-in rather than
-granted automatically. Provisioned by an Ansible role rather than
-base-image baking because this estate has no golden-image pipeline (see the
-role README for the rationale).
+granted automatically.
 
 The molecule scenario is genuine docker-in-docker - a privileged,
 systemd-init container so the inner daemon really starts and `verify` can
