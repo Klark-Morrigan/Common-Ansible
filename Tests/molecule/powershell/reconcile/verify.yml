@@ -1,0 +1,79 @@
+---
+# Verify the post-swap state: 7.5.9 fully removed, 7.6.4 active. Covers the
+# swap case at the powershell-role level - a new desired version driving the
+# pattern's uninstall-then-install, with the single shared symlink correctly
+# repointed rather than left dangling at the removed install dir.
+
+- name: Verify - PowerShell swap post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    old_dir: /opt/powershell-7.5.9
+    old_manifest: /var/lib/common-ansible/toolchains/manifests/powershell-7.5.9.json
+    new_dir: /opt/powershell-7.6.4
+    new_manifest: /var/lib/common-ansible/toolchains/manifests/powershell-7.6.4.json
+  tasks:
+    - name: Stat the old version's artifacts
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: old_artifacts
+      loop:
+        - "{{ old_dir }}"
+        - "{{ old_manifest }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Assert every 7.5.9 artifact was removed
+      ansible.builtin.assert:
+        that:
+          - (old_artifacts.results | map(attribute='stat.exists') | list) == [false, false]
+        fail_msg: >-
+          A PowerShell 7.5.9 artifact survived the swap:
+          {{ old_artifacts.results | map(attribute='stat.exists') | list }}
+
+    - name: Stat the new version's extracted pwsh host
+      ansible.builtin.stat:
+        path: "{{ new_dir }}/pwsh"
+      register: new_bin
+
+    - name: Assert 7.6.4 is installed
+      ansible.builtin.assert:
+        that:
+          - new_bin.stat.exists
+          - new_bin.stat.executable
+        fail_msg: "PowerShell 7.6.4 did not install: {{ new_bin.stat }}"
+
+    - name: Stat the /usr/local/bin/pwsh symlink
+      ansible.builtin.stat:
+        path: /usr/local/bin/pwsh
+      register: symlink
+
+    - name: Assert the pwsh symlink retargeted at 7.6.4
+      ansible.builtin.assert:
+        that:
+          - symlink.stat.islnk
+          - symlink.stat.lnk_target == new_dir ~ '/pwsh'
+        fail_msg: >-
+          /usr/local/bin/pwsh did not retarget at 7.6.4; stat: {{ symlink.stat }}
+
+    - name: Run the symlinked pwsh
+      ansible.builtin.command: pwsh
+      changed_when: false
+      register: pwsh_run
+
+    - name: Assert the active pwsh reports 7.6.4
+      ansible.builtin.assert:
+        that:
+          - pwsh_run.stdout | trim == '7.6.4'
+        fail_msg: "Active pwsh is not 7.6.4: {{ pwsh_run.stdout }}"
+
+    - name: Assert the 7.6.4 manifest is present
+      ansible.builtin.stat:
+        path: "{{ new_manifest }}"
+      register: new_manifest_stat
+
+    - name: Fail if the 7.6.4 manifest is missing
+      ansible.builtin.assert:
+        that:
+          - new_manifest_stat.stat.exists
+        fail_msg: "The PowerShell 7.6.4 manifest is missing after the swap."

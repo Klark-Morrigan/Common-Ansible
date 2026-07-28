@@ -1,0 +1,17 @@
+---
+# Prepare the default scenario: bring the fixture file server up serving a
+# 7.6.4 tarball. The converge then installs that exact version; molecule
+# idempotence re-runs converge to prove the no-op.
+
+- name: Prepare - bring the PowerShell fileserver fixture up
+  hosts: all
+  gather_facts: false
+  vars:
+    fixture_port: 18851
+    fixture_stage_dir: /var/lib/powershell-fixture/srv
+    fixture_build_dir: /var/lib/powershell-fixture/build
+    fixture_versions:
+      - "7.6.4"
+  tasks:
+    - name: Bring the fixture http server up
+      ansible.builtin.include_tasks: ../tasks/_fixture-powershell.yml

@@ -1,0 +1,60 @@
+---
+# Defaults and the input contract for the powershell role.
+#
+# Installs PowerShell (pwsh) from Microsoft's self-contained
+# linux-x64 release tarball via the section-1 host-push pattern
+# (roles/toolchain_host_push). It exists because CI composite actions
+# that declare `shell: pwsh` need the interpreter pre-baked into the
+# runner image; a runner without it fails with a bare
+# "pwsh: command not found" that no dotnet-level preflight can catch.
+#
+# Required input: none. With the defaults below and an empty
+# powershell_versions the role is a no-op that uninstalls any
+# PowerShell the pattern has installed.
+#
+# powershell_versions - the desired versions, each an EXACT
+# "<major>.<minor>.<patch>" string (e.g. "7.6.4"). Unlike jdk and
+# dotnet_sdk, this role accepts no loose pin and makes no upstream
+# call, because a PowerShell release archive name is a pure function
+# of its version:
+#
+#   powershell-<version>-linux-<arch>.tar.gz
+#
+# There is nothing to resolve, so resolving would only add a
+# rate-limited api.github.com dependency on every target. Loose pins
+# ("7", "7.6") are the deploying consumer's concern: it resolves them
+# once, host-side, while staging the verified tarball, and hands this
+# role the concrete version. That mirrors dotnet_tools, which likewise
+# takes exact versions only.
+#
+# Empty (the default) means "no PowerShell desired", which uninstalls
+# every version the pattern currently has installed - the same
+# set-difference removal toolchain_host_push gives every tool.
+#
+# v1 supports at most ONE PowerShell per host (tasks/main.yml asserts
+# it). Multi-version coexistence would need per-version symlink names
+# beyond the single /usr/local/bin/pwsh and /etc/profile.d/powershell.sh
+# this role wires, so failing loud beats silently installing only the
+# first. Same cap, same reason, as jdk and dotnet_sdk.
+powershell_versions: []
+
+# Target architecture, spliced into the archive name. Defaulted to the
+# only build this role installs today (64-bit x86 Linux), exposed so an
+# aarch64 fleet is a var override rather than a fork. Microsoft names
+# the arm64 asset powershell-<version>-linux-arm64.tar.gz, so 'arm64'
+# is the other valid value.
+powershell_architecture: x64
+
+# Install base, forwarded to toolchain_host_push so the install dir it
+# creates (/opt/powershell-<version>) is one var read in one place.
+powershell_install_base: /opt
+
+# Opt out of the post-install smoke check. It runs the freshly
+# symlinked pwsh and asserts it reports the version just installed,
+# which is what turns a broken install into an actionable failure at
+# provision time rather than a cryptic one in a later CI job. The
+# common cause of a pwsh that installs but will not start is a missing
+# native prerequisite (libicu above all), which no file-level check
+# would notice. Disable only where running the interpreter is
+# impossible - e.g. a cross-architecture staging host.
+powershell_verify_runtime: true

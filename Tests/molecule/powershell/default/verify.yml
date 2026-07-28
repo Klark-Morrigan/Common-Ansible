@@ -1,0 +1,115 @@
+---
+# Verify the post-converge state for the install direction. Idempotence
+# (re-run reports changed: 0) is checked by `molecule idempotence` in the
+# default sequence; this file asserts the state the install produced.
+
+- name: Verify - PowerShell 7.6.4 install post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    desired_version: "7.6.4"
+    install_dir: /opt/powershell-7.6.4
+    manifest_path: /var/lib/common-ansible/toolchains/manifests/powershell-7.6.4.json
+  tasks:
+    # strip_components=0 must have landed the flat `pwsh` host at the
+    # install-dir root (no wrapper dir, unlike the JDK). The executable bit
+    # comes from the tarball itself - the role adds no chmod, so this
+    # assertion is what would catch that assumption breaking upstream.
+    - name: Stat the extracted pwsh host
+      ansible.builtin.stat:
+        path: "{{ install_dir }}/pwsh"
+      register: extracted
+
+    - name: Assert pwsh extracted to the versioned install dir
+      ansible.builtin.assert:
+        that:
+          - extracted.stat.exists
+          - extracted.stat.executable
+        fail_msg: >-
+          pwsh is missing or not executable under {{ install_dir }}:
+          {{ extracted.stat }}
+
+    # A single /usr/local/bin/pwsh symlink - everything PowerShell runs
+    # dispatches through the one host, so no per-launcher enumeration.
+    - name: Stat the /usr/local/bin/pwsh symlink
+      ansible.builtin.stat:
+        path: /usr/local/bin/pwsh
+      register: link
+
+    - name: Assert pwsh is symlinked to the install dir
+      ansible.builtin.assert:
+        that:
+          - link.stat.islnk
+          - link.stat.lnk_target == install_dir ~ '/pwsh'
+        fail_msg: "/usr/local/bin/pwsh symlink is wrong: {{ link.stat }}"
+
+    # Run pwsh off PATH the way a CI step would - proves compose -> extract
+    # -> symlink -> PATH end to end, independent of any profile script.
+    - name: Run the symlinked pwsh
+      ansible.builtin.command: pwsh
+      changed_when: false
+      register: pwsh_run
+
+    - name: Assert pwsh reports the desired version
+      ansible.builtin.assert:
+        that:
+          - pwsh_run.stdout | trim == desired_version
+        fail_msg: "pwsh did not report {{ desired_version }}: {{ pwsh_run.stdout }}"
+
+    # profile.d carries the unattended-runner opt-outs.
+    - name: Slurp the profile.d script
+      ansible.builtin.slurp:
+        src: /etc/profile.d/powershell.sh
+      register: profile_script
+
+    - name: Assert the profile.d script wires both opt-outs
+      ansible.builtin.assert:
+        that:
+          - "'POWERSHELL_TELEMETRY_OPTOUT=1' in profile_body"
+          - "'POWERSHELL_UPDATECHECK=Off' in profile_body"
+        fail_msg: >-
+          /etc/profile.d/powershell.sh is not wired correctly:
+          {{ profile_body }}
+      vars:
+        profile_body: "{{ profile_script.content | b64decode }}"
+
+    # Manifest records the version and the single symlink. owned_files is
+    # empty - PowerShell has no fixed config file outside its install dir,
+    # unlike the .NET SDK's /etc/dotnet/install_location.
+    - name: Slurp the version manifest
+      ansible.builtin.slurp:
+        src: "{{ manifest_path }}"
+      register: manifest_raw
+
+    - name: Parse the manifest
+      ansible.builtin.set_fact:
+        manifest: "{{ manifest_raw.content | b64decode | from_json }}"
+
+    - name: Assert the manifest records the version and symlink
+      ansible.builtin.assert:
+        that:
+          - manifest.version == desired_version
+          - manifest.name == 'powershell'
+          - manifest.install_dir == install_dir
+          - manifest.profile_script == 'powershell'
+          - manifest.symlinks | length == 1
+          - manifest.symlinks[0].path == '/usr/local/bin/pwsh'
+          - manifest.owned_files == []
+        fail_msg: "Manifest content is wrong: {{ manifest }}"
+
+    # The exact-version contract, exercised against the real role rather
+    # than a copy of its regex. Covers the loose pins an operator would
+    # plausibly write plus the two shapes that look exact but are not.
+    #
+    # This lives in verify rather than converge so it cannot perturb
+    # `molecule idempotence`: the role fails at its first assert, before
+    # any task that could change state.
+    - name: Assert the role rejects every non-exact version
+      ansible.builtin.include_tasks: ../tasks/_assert-loose-pin-rejected.yml
+      loop:
+        - "7"
+        - "7.6"
+        - "v7.6.4"
+        - "7.6.4-preview.1"
+      loop_control:
+        loop_var: loose_pin

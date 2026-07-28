@@ -1,0 +1,22 @@
+---
+# Converge - install PowerShell 7.6.4. The role composes the archive name
+# powershell-7.6.4-linux-x64.tar.gz, and toolchain_host_push extracts it
+# flat into /opt/powershell-7.6.4, symlinks /usr/local/bin/pwsh, and writes
+# /etc/profile.d/powershell.sh. The role's own smoke check then runs the
+# symlinked stub, so a converge that reaches the end has already proved the
+# interpreter starts.
+#
+# include_role (not import_role) defers resolution to runtime so the
+# molecule.yml ANSIBLE_ROLES_PATH override is honoured.
+
+- name: Converge - install PowerShell 7.6.4
+  hosts: all
+  gather_facts: false
+  vars:
+    host_file_server_base_url: http://127.0.0.1:18851
+    powershell_versions:
+      - "7.6.4"
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: powershell

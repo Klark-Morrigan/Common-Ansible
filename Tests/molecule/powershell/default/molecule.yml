@@ -1,0 +1,51 @@
+---
+# Molecule scenario for the powershell role - install one version and
+# prove idempotence.
+#
+# Single Ubuntu 24.04 container, Docker driver, ansible verifier. The role
+# only touches the filesystem and one localhost http fixture, so a
+# non-systemd sleep-infinity container suffices. The fixture http server
+# runs INSIDE the container (prepare.yml) bound to 127.0.0.1, serving the
+# fake PowerShell tarballs. There is no upstream feed to stand up - the
+# role composes its archive name rather than resolving it.
+#
+# Image: reuses the toolchain_host_push base (python3 + sudo + tar + gzip
+# on ubuntu:24.04) - this fixture needs the identical package set, so it
+# is one shared image, not a duplicated Dockerfile. Build it via the
+# command in Tests/molecule/toolchain_host_push/Dockerfile.
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: instance
+    image: common-ansible/toolchain-host-push-base:24.04
+    pre_build_image: true
+    command: /bin/sleep infinity
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  env:
+    # ANSIBLE_ROLES_PATH (env) wins over ansible.cfg's roles_path and
+    # propagates across every molecule phase. MOLECULE_PROJECT_DIRECTORY
+    # is the scenario dir; three levels up is the repo root, then roles/.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../../roles"
+  config_options:
+    defaults:
+      stdout_callback: yaml
+      callbacks_enabled: profile_tasks
+  inventory:
+    host_vars:
+      instance:
+        ansible_user: root
+
+verifier:
+  name: ansible

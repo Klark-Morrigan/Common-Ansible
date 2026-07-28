@@ -1,0 +1,45 @@
+---
+# Molecule scenario for the powershell role - version swap. prepare
+# installs 7.5.9; converge desires 7.6.4, so the pattern uninstalls the
+# stale version BEFORE installing the new one, freeing the shared
+# /usr/local/bin/pwsh symlink and /etc/profile.d/powershell.sh for the
+# incoming version.
+#
+# Same container/driver/verifier shape as the default scenario; see that
+# scenario's molecule.yml for the per-setting rationale.
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: instance
+    image: common-ansible/toolchain-host-push-base:24.04
+    pre_build_image: true
+    command: /bin/sleep infinity
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  env:
+    # ANSIBLE_ROLES_PATH (env) wins over ansible.cfg's roles_path and
+    # propagates across every molecule phase. MOLECULE_PROJECT_DIRECTORY
+    # is the scenario dir; three levels up is the repo root, then roles/.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../../roles"
+  config_options:
+    defaults:
+      stdout_callback: yaml
+      callbacks_enabled: profile_tasks
+  inventory:
+    host_vars:
+      instance:
+        ansible_user: root
+
+verifier:
+  name: ansible

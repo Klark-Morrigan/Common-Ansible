@@ -1,0 +1,48 @@
+---
+# Applies the powershell role with ONE non-exact version and asserts it
+# refuses, exercising the real role rather than a copy of its regex.
+#
+# A loose pin would compose an archive name that does not exist and fail
+# much later as an opaque 404 from the file server, so rejecting it up
+# front is the guarantee the deploying consumer's host-side resolve step
+# is built on: the consumer turns '7.6' into '7.6.4' while it stages the
+# verified tarball, and this role accepts only that concrete result.
+#
+# Lives in its own file because `loop` is not a valid attribute on a
+# block - the caller loops over an include of this file instead.
+#
+# Caller contract:
+#   loose_pin - the non-exact version string to feed the role.
+
+- name: Assert the role rejects the loose pin
+  vars:
+    powershell_versions: "{{ [loose_pin] }}"
+  block:
+    - name: Apply the role with a non-exact version
+      ansible.builtin.include_role:
+        name: powershell
+
+    # Reached only when the role's granularity assert did NOT fire, which
+    # is the regression this whole file exists to catch.
+    - name: Fail if the role accepted it
+      ansible.builtin.fail:
+        msg: >-
+          powershell_versions '{{ loose_pin }}' is not an exact
+          major.minor.patch, but the role accepted it.
+  rescue:
+    # Distinguish "rejected for the right reason" from any other failure -
+    # a role that broke for an unrelated reason would otherwise look like
+    # a passing test.
+    #
+    # Searched over the whole serialized result rather than .msg: the
+    # role's granularity assert runs under a `loop`, so the top-level msg
+    # is only "One or more items failed" and the real diagnostic sits in
+    # .results[].msg. Matching the JSON covers both shapes, so this stays
+    # correct if the role ever drops the loop.
+    - name: Confirm the rejection named the granularity contract
+      ansible.builtin.assert:
+        that:
+          - "'not an exact version' in (ansible_failed_result | default({}) | to_json)"
+        fail_msg: >-
+          The role rejected '{{ loose_pin }}' but not via the granularity
+          assert: {{ ansible_failed_result | default('(no result)') }}
