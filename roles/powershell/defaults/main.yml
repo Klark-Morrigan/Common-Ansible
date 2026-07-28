@@ -49,6 +49,35 @@ powershell_architecture: x64
 # creates (/opt/powershell-<version>) is one var read in one place.
 powershell_install_base: /opt
 
+# Native libraries the tarball does NOT ship and the interpreter cannot
+# start without. This role installs them itself rather than leaving them
+# to the consumer's section-2 apt declaration, because they are not
+# desired state - there is no configuration in which you want PowerShell
+# and not these. Leaving them to config would make every consuming VM
+# re-derive the same hard requirement, and get a hard failure when it
+# forgot. The docker role takes the same line with its own apt
+# prerequisites.
+#
+# Verified rather than assumed: a stock ubuntu:24.04 has no ICU at all,
+# and pwsh dies on startup with "Couldn't find a valid ICU package
+# installed on the system". Installing libicu74 is the whole fix.
+#
+# The package name is release-specific (libicu74 on Ubuntu 24.04,
+# libicu70 on 22.04), which is exactly why it is a var: a distro bump is
+# a one-line override here, and the post-install smoke check below fails
+# loudly and quotably if it is ever wrong. There is no unversioned alias
+# to depend on instead - Ubuntu ships no virtual `libicu` package, and
+# libicu-dev would drag in headers a runtime host has no use for.
+#
+# Empty skips the install entirely, for an image that already bakes them.
+powershell_native_packages:
+  - libicu74
+
+# Throttle for the apt cache refresh that precedes the install above, so
+# a re-run inside the window neither updates nor reports changed. Mirrors
+# toolchain_apt_cache_valid_time, for the same idempotence reason.
+powershell_apt_cache_valid_time: 3600
+
 # Opt out of the post-install smoke check. It runs the freshly
 # symlinked pwsh and asserts it reports the version just installed,
 # which is what turns a broken install into an actionable failure at

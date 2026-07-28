@@ -43,6 +43,26 @@
           - link.stat.lnk_target == install_dir ~ '/pwsh'
         fail_msg: "/usr/local/bin/pwsh symlink is wrong: {{ link.stat }}"
 
+    # The native prerequisite the tarball omits. Asserted through dpkg
+    # rather than the role's own var so this checks the package actually
+    # landed on the box, not that the role was configured to want it -
+    # a stock ubuntu:24.04 ships no ICU, and real pwsh aborts at startup
+    # without it.
+    - name: Query dpkg for the ICU runtime
+      ansible.builtin.command: dpkg-query -W -f=${Status} libicu74
+      changed_when: false
+      failed_when: false
+      register: icu_pkg
+
+    - name: Assert the role installed the ICU runtime
+      ansible.builtin.assert:
+        that:
+          - icu_pkg.rc == 0
+          - "'install ok installed' in icu_pkg.stdout"
+        fail_msg: >-
+          libicu74 is not installed, so a real pwsh would abort at startup
+          with "Couldn't find a valid ICU package": {{ icu_pkg.stdout }}
+
     # Run pwsh off PATH the way a CI step would - proves compose -> extract
     # -> symlink -> PATH end to end, independent of any profile script.
     - name: Run the symlinked pwsh
