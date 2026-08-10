@@ -1,0 +1,70 @@
+---
+# Converge - copy the declared single form entries onto the VM.
+#
+# Also what `molecule idempotence` re-runs, so it is this play that has to
+# report changed=0 on a converged VM.
+#
+# include_role (not import_role) defers resolution to runtime so the
+# molecule.yml ANSIBLE_ROLES_PATH override is honoured.
+
+- name: Converge - transport the declared single form file entries
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: vm_files
+      vars:
+        vm_files_entries: "{{ fixture_entries }}"
+
+    # The role's standing promise is that a play can include it
+    # unconditionally and let config decide whether there is anything to
+    # copy. That is a claim about the empty list specifically - every loop
+    # in the transport runs zero times and the register they chain through
+    # is never populated by a task that ran - so it is exercised here
+    # rather than left to the first consumer to discover.
+    - name: Include the role under test with nothing declared
+      ansible.builtin.include_role:
+        name: vm_files
+      vars:
+        vm_files_entries: []
+
+    # The files report accumulator is asserted HERE rather than in
+    # verify.yml because it is a fact, and molecule's verifier is a
+    # separate ansible-playbook run that cannot see one.
+    #
+    # Statuses are asserted as a DOMAIN rather than as values: `molecule
+    # idempotence` re-runs this converge against an already-converged VM,
+    # where every file is `unchanged`, so pinning `copied` would pass on
+    # the first pass and fail on the second. The rendered statuses are
+    # pinned in Tests/molecule/files_report/default instead, whose entries
+    # are seeded rather than produced.
+    - name: Assert the transport recorded every copied file in the report
+      ansible.builtin.assert:
+        that:
+          # One entry per file, and the no-op include above contributed
+          # none - the other half of the promise that an empty entry list
+          # is a no-op.
+          - files_report_entries | length == fixture_entries | length
+          - >-
+            files_report_entries | map(attribute='target') | sort | list
+            == fixture_entries | map(attribute='target') | sort | list
+          - >-
+            files_report_entries | map(attribute='source') | sort | list
+            == fixture_entries | map(attribute='source') | sort | list
+          # Single form throughout, and a pattern is what marks a file as
+          # glob-matched, so nothing here may carry one.
+          - files_report_entries | selectattr('pattern') | list | length == 0
+          # The report quotes the policy the transport applied, which
+          # verify.yml independently reads back off the VM - so the two
+          # together prove the report describes what actually landed.
+          - files_report_entries | map(attribute='owner') | unique | list == ['root']
+          - files_report_entries | map(attribute='group') | unique | list == ['root']
+          - files_report_entries | map(attribute='mode') | unique | list == ['0644']
+          - >-
+            files_report_entries
+            | rejectattr('status', 'in', ['copied', 'unchanged'])
+            | list | length == 0
+        fail_msg: >-
+          the files report accumulator does not describe the transport:
+          {{ files_report_entries | default('<unset>') }}

@@ -1,0 +1,222 @@
+---
+# Molecule scenario for the vm_files role - bulk (glob) resolution.
+#
+# Split from `default` because the subject is different. That scenario
+# asks whether a named file is transported correctly; this one asks which
+# files a pattern names and where each of them lands - the half of the
+# contract ported from the PowerShell resolver, and the half where the two
+# engines can silently disagree.
+#
+# The `default` sequence's idempotence phase matters here too: resolution
+# runs on every pass, so a glob that expanded differently the second time
+# would surface as a re-copy.
+#
+# Single Ubuntu 24.04 container, Docker driver, ansible verifier. The role
+# only writes files, so a non-systemd sleep-infinity container suffices.
+#
+# Image: reuses the toolchain_host_push base (python3 + sudo on
+# ubuntu:24.04). No custom Dockerfile - build it via the command in
+# Tests/molecule/toolchain_host_push/Dockerfile.
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: instance
+    image: common-ansible/toolchain-host-push-base:24.04
+    pre_build_image: true
+    command: /bin/sleep infinity
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  env:
+    # ANSIBLE_ROLES_PATH (env) wins over ansible.cfg's roles_path and
+    # propagates across every molecule phase. MOLECULE_PROJECT_DIRECTORY
+    # is the scenario dir; three levels up is the repo root, then roles/.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../../roles"
+  config_options:
+    defaults:
+      stdout_callback: yaml
+      callbacks_enabled: profile_tasks
+  inventory:
+    host_vars:
+      instance:
+        ansible_user: root
+
+        # Staged into molecule's per-scenario ephemeral directory so the
+        # fixtures stay out of the repo working tree and `molecule
+        # destroy` takes them with it. Resolved lazily at task time, so
+        # the env lookup runs on the controller rather than when molecule
+        # writes the inventory.
+        fixture_dir: >-
+          {{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/vm-files-bulk
+
+        # The controller-side tree every case below is cut out of. One
+        # tree rather than one per case, because the cases are precisely
+        # about which SUBSET of a tree a pattern selects - a per-case tree
+        # containing only the expected matches would prove nothing about
+        # what a pattern leaves behind.
+        #
+        # Each file's content is derived from this relative path, so the
+        # verifier can name the exact bytes it expects at each
+        # destination and two matches landing on one target cannot pass.
+        fixture_files:
+          # Directly under the root: the shallow, non-recursive case, plus
+          # one file the extension in the pattern must exclude.
+          - a.json
+          - b.json
+          - c.txt
+          # Two characters where the others have one, so '?' - which
+          # matches exactly one - has something to exclude that '*' takes.
+          - ab.json
+          # A dot-prefixed name. The role matches these like any other,
+          # because the estate's sources sit on a Windows volume where a
+          # leading dot carries no hidden attribute and the PowerShell
+          # engine therefore matches them.
+          - .hidden.json
+          # Two levels below sub/, so "recurse off does not descend" and
+          # "preserve mirrors more than one level" are both observable.
+          - sub/inner.json
+          - sub/deep/leaf.json
+          # Same basename in sibling directories reached through a
+          # wildcard MID-pattern. Preserved they stay apart; flattened
+          # they collide, which is the duplicate-target case in verify.
+          - variants/v1/config.ini
+          - variants/v2/config.ini
+
+        # Directories with no files anywhere below them, so a pattern can
+        # match directories only - which must surface as no match at all.
+        fixture_dirs:
+          - onlydirs/x
+          - onlydirs/y
+
+        target_root: /opt/vm-files-bulk
+
+        # Already in the role's entry shape, so converge passes them
+        # straight through with no projection - the scenario declares
+        # exactly what an operator's config would.
+        fixture_entries:
+          # Flatten, shallow. The trailing separator on targetDir is
+          # deliberate: it must be tolerated rather than doubling up.
+          - pattern: "{{ fixture_dir }}/*.json"
+            targetDir: "{{ target_root }}/flat/"
+
+          # Flatten, recursive: basenames from two different depths land
+          # side by side under one directory.
+          - pattern: "{{ fixture_dir }}/sub/*.json"
+            targetDir: "{{ target_root }}/flat-recurse"
+            recurse: true
+
+          # The same match set, mirrored instead of flattened - so the
+          # only difference between the two targets below is the flag.
+          - pattern: "{{ fixture_dir }}/sub/*.json"
+            targetDir: "{{ target_root }}/preserve"
+            recurse: true
+            preserveRelativePath: true
+
+          # The component-boundary anchor case. The pattern's wildcard is
+          # mid-path, so the anchor is '<fixture>/variants' and NOT
+          # '<fixture>/variants/v' - the targets below are 'v1/...' and
+          # 'v2/...' rather than '1/...' and '2/...'.
+          - pattern: "{{ fixture_dir }}/variants/v*/config.ini"
+            targetDir: "{{ target_root }}/anchor"
+            preserveRelativePath: true
+
+          # The second wildcard, which nothing else here exercises: '?'
+          # matches exactly one character, so 'ab.json' is left behind
+          # where '*.json' takes it.
+          - pattern: "{{ fixture_dir }}/?.json"
+            targetDir: "{{ target_root }}/single-char"
+
+          # A pattern whose matches include directories as well as files.
+          # The directories must be dropped at the source, so exactly the
+          # files directly under the fixture root land here.
+          - pattern: "{{ fixture_dir }}/*"
+            targetDir: "{{ target_root }}/all"
+
+          # A single form entry among the bulk ones. Both forms feed one
+          # accumulator - single entries seed it and every bulk entry
+          # appends to it - so something has to prove that resolving a
+          # bulk entry adds to that list rather than replacing it.
+          - source: "{{ fixture_dir }}/c.txt"
+            target: "{{ target_root }}/single/renamed.txt"
+
+        # What each entry above must have produced, as target -> the
+        # fixture whose bytes it must hold. Stated as data so the
+        # verifier asserts placement and content in one pass.
+        expected_files:
+          - target: "{{ target_root }}/flat/a.json"
+            fixture: a.json
+          - target: "{{ target_root }}/flat/b.json"
+            fixture: b.json
+          - target: "{{ target_root }}/flat/ab.json"
+            fixture: ab.json
+          - target: "{{ target_root }}/flat/.hidden.json"
+            fixture: .hidden.json
+
+          - target: "{{ target_root }}/flat-recurse/inner.json"
+            fixture: sub/inner.json
+          - target: "{{ target_root }}/flat-recurse/leaf.json"
+            fixture: sub/deep/leaf.json
+
+          - target: "{{ target_root }}/preserve/inner.json"
+            fixture: sub/inner.json
+          - target: "{{ target_root }}/preserve/deep/leaf.json"
+            fixture: sub/deep/leaf.json
+
+          - target: "{{ target_root }}/anchor/v1/config.ini"
+            fixture: variants/v1/config.ini
+          - target: "{{ target_root }}/anchor/v2/config.ini"
+            fixture: variants/v2/config.ini
+
+          - target: "{{ target_root }}/single-char/a.json"
+            fixture: a.json
+          - target: "{{ target_root }}/single-char/b.json"
+            fixture: b.json
+
+          - target: "{{ target_root }}/all/a.json"
+            fixture: a.json
+          - target: "{{ target_root }}/all/b.json"
+            fixture: b.json
+          - target: "{{ target_root }}/all/ab.json"
+            fixture: ab.json
+          - target: "{{ target_root }}/all/.hidden.json"
+            fixture: .hidden.json
+          - target: "{{ target_root }}/all/c.txt"
+            fixture: c.txt
+
+          - target: "{{ target_root }}/single/renamed.txt"
+            fixture: c.txt
+
+        # The other half of resolution, and the half a passing
+        # expected_files list cannot speak for: what a pattern must NOT
+        # have selected. Every one of these would exist had the pattern
+        # been read too generously.
+        absent_targets:
+          # The extension in the pattern is a filter, not decoration.
+          - "{{ target_root }}/flat/c.txt"
+          # recurse defaults to false, so the shallow entry stays shallow.
+          - "{{ target_root }}/flat/inner.json"
+          - "{{ target_root }}/flat/leaf.json"
+          # Flatten mode puts basenames directly under targetDir; nothing
+          # may mirror a sub-tree unless preserveRelativePath asked for it.
+          - "{{ target_root }}/flat-recurse/deep/leaf.json"
+          # '?' is one character, not "one or more" and not "any run".
+          - "{{ target_root }}/single-char/ab.json"
+          - "{{ target_root }}/single-char/.hidden.json"
+          # Directories are dropped at the source, so a match set that
+          # included them must still put nothing named after one on the VM.
+          - "{{ target_root }}/all/sub"
+          - "{{ target_root }}/all/variants"
+          - "{{ target_root }}/all/onlydirs"
+
+verifier:
+  name: ansible

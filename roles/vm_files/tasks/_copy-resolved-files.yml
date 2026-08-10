@@ -1,0 +1,68 @@
+---
+# Transport - put every resolved source/target pair onto the VM under the
+# role's ownership policy.
+#
+# Shared by both entry forms deliberately. What differs between a single
+# entry and a bulk one is resolution; once an entry has become a list of
+# source/target pairs there is exactly one transport, so the policy stated
+# below cannot drift between the forms.
+#
+# Caller contract (set by main.yml):
+#   vm_files_resolved  list of {source, target} mappings, each optionally
+#                      carrying the `pattern` that produced it. source is a
+#                      controller-side path, target an absolute VM path.
+#
+# Produced for the caller:
+#   vm_files_copied    the copy loop's results, which _record-report.yml
+#                      projects into the files report.
+#
+# Files land root:root 0644 and created directories root:root 0755, both
+# stated here rather than inherited from whatever the source happens to
+# carry on the controller. The values come from vars/main.yml because the
+# report quotes the same ones; see the role README (Transport) for the full
+# rationale.
+
+# The parent directory is created only where one is genuinely absent,
+# which is why this stats first instead of simply declaring the directory.
+# A `file: state=directory` carrying owner and mode REASSERTS them on a
+# directory that already exists, so a single entry targeting, say, a home
+# directory would silently chown it to root. Creating what is missing and
+# touching nothing else keeps the role's writes confined to the files it
+# was actually asked to copy.
+- name: Stat the parent directory of every resolved target
+  ansible.builtin.stat:
+    path: "{{ item.target | dirname }}"
+  become: true
+  loop: "{{ vm_files_resolved }}"
+  loop_control:
+    label: "{{ item.target | dirname }}"
+  register: vm_files_target_dir_stat
+
+# Intermediate levels are created too (`file` applies the same attributes
+# to every level it creates), so a target nested several directories deep
+# needs no separate declaration of its ancestors.
+- name: Create the parent directories that do not exist yet
+  ansible.builtin.file:
+    path: "{{ item.item.target | dirname }}"
+    state: directory
+    owner: "{{ vm_files_dir_owner }}"
+    group: "{{ vm_files_dir_group }}"
+    mode: "{{ vm_files_dir_mode }}"
+  become: true
+  loop: >-
+    {{ vm_files_target_dir_stat.results | rejectattr('stat.exists') | list }}
+  loop_control:
+    label: "{{ item.item.target | dirname }}"
+
+- name: Copy each resolved file onto the VM
+  ansible.builtin.copy:
+    src: "{{ item.source }}"
+    dest: "{{ item.target }}"
+    owner: "{{ vm_files_file_owner }}"
+    group: "{{ vm_files_file_group }}"
+    mode: "{{ vm_files_file_mode }}"
+  become: true
+  loop: "{{ vm_files_resolved }}"
+  loop_control:
+    label: "{{ item.target }}"
+  register: vm_files_copied

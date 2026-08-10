@@ -1,0 +1,71 @@
+---
+# Defaults and the input contract for the files_report role.
+#
+# This role copies nothing. It is the terminal consumer of the play-wide
+# `files_report_entries` accumulator that vm_files appends to as it
+# transports, and it renders one block per host answering the question the
+# per-task PLAY output cannot: which files are on this VM because config
+# asked for them, where did each of them come from, and did THIS run put
+# it there.
+#
+# Why it is worth a report at all: a bulk entry is one line of config that
+# becomes an unknown number of files. An operator reading the config knows
+# a glob was declared; only the run knows what it matched. The PowerShell
+# engine that has owned this schema never printed that expansion, so
+# "which JARs actually reached the VM, and under what names" was answerable
+# only by going and looking. That is the gap this closes.
+#
+# Why an accumulator rather than a terminal scan: status is only knowable
+# at the moment each file is copied. A scan of the finished VM sees the
+# file either way and cannot tell one this run wrote from one that was
+# already correct - which is the distinction an operator re-running
+# provisioning after a hand-edit is looking for.
+#
+# Why no residency probe (unlike artifact_report): `copy` is authoritative
+# about the file it just wrote. The probe there exists because a converged
+# toolchain run short-circuits on a manifest and never touches the
+# artifact, so the report would otherwise describe a cache from months
+# ago. Nothing here short-circuits - every declared file is reconciled on
+# every run - so a `stat` per file would spend a round trip per JAR to
+# restate what the transport already returned.
+#
+# The accumulator name carries no role prefix on purpose: it is a
+# cross-role contract, like toolchain_report_entries, written by vm_files
+# and read by this role. That is why the producing append task carries
+# `# noqa: var-naming[no-role-prefix]` - the rule assumes a var set inside
+# a role belongs to that role, which is exactly what this one does not do.
+# Documented here, once, rather than at the append site.
+#
+# files_report_entries - appended by vm_files, never set by an operator.
+# One entry per file that landed, NOT per declared entry: a bulk entry
+# contributes as many as its glob matched. Each entry:
+#
+#   source   (required) Controller-side path the bytes came from. For a
+#                       Windows-hosted estate this is the translated POSIX
+#                       form, which is what the controller actually read.
+#   target   (required) Absolute path the file landed on, on the VM.
+#   owner    (required) Owning user, as applied by the transport.
+#   group    (required) Owning group, as applied by the transport.
+#   mode     (required) Octal mode, as applied by the transport. These
+#                       three are quoted from the transport's own policy
+#                       constants, so the report cannot describe ownership
+#                       the role does not enforce.
+#   status   (required) copied (this run wrote the bytes) | unchanged (the
+#                       file was already current, so the run touched
+#                       nothing).
+#   pattern  (required) The glob that produced this file; "" for a file that
+#                       was named outright. Present on every entry rather
+#                       than only on matched ones so the template reads one
+#                       shape.
+#
+# The entry's ORIGIN is its pattern's presence, not a field of its own: a
+# named file has no pattern and a matched one always has the pattern that
+# named it. That is the discriminator vm_files already uses to tell the two
+# entry forms apart, and one fact stored twice is one fact that can
+# contradict itself - an entry claiming to be named while carrying a glob
+# would render under a heading its own data denies.
+#
+# The report groups by it because the two need reading differently: a named
+# file is verifiable against the config by eye, a matched one is only
+# knowable from the run.
+files_report_entries: []

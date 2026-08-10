@@ -37,9 +37,10 @@ The rendered text is also left behind as a fact, so a test - or any
 consumer wanting the report as data rather than as stdout - asserts on the
 same value the operator saw instead of scraping the callback.
 
-Two roles delegate here today,
-[`toolchain_report`](../toolchain_report/README.md) and
-[`artifact_report`](../artifact_report/README.md).
+Three roles delegate here today:
+[`toolchain_report`](../toolchain_report/README.md),
+[`artifact_report`](../artifact_report/README.md) and
+[`files_report`](../files_report/README.md).
 
 ## Var contract
 
@@ -65,10 +66,11 @@ passes the **result**, rather than passing a template name for this role
 to look up.
 
 Doing it the other way would make template resolution depend on
-`ansible_search_path` containing the calling role - true in practice, but
-a subtlety that would bite the moment a third report role landed with a
-similarly-named template. Passing text keeps the boundary blunt: this role
-never resolves a path and never needs to know a template exists.
+`ansible_search_path` containing the calling role - true in practice, but a
+subtlety that would bite the moment two report roles carried
+similarly-named templates. Three of them exist now, each with its own
+`*-report.j2`. Passing text keeps the boundary blunt: this role never
+resolves a path and never needs to know a template exists.
 
 ## Consuming this role
 
@@ -89,9 +91,10 @@ lookup - evaluate in the calling role's scope at runtime.
 ## Tests
 
 No scenario of its own: this role has no behaviour independent of a
-report. It is covered end to end by
-`Tests/molecule/toolchain_report/default` and
-`Tests/molecule/artifact_report/default`, whose `verify.yml` asserts the
-line list this role produces - including that no blank or
-whitespace-only lines survive the split, which is the failure mode all
-three mechanics above exist to prevent.
+report. It is covered end to end by the scenario of each report that
+delegates here - `Tests/molecule/toolchain_report/default`,
+`Tests/molecule/artifact_report/default` and
+`Tests/molecule/files_report/default` - whose `verify.yml` asserts the line
+list this role produces, including that no blank or whitespace-only lines
+survive the split, which is the failure mode all three mechanics above
+exist to prevent.

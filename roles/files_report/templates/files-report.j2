@@ -1,0 +1,58 @@
+{#
+  Render files_report_entries for one host as plain text lines.
+
+  Layout mechanics (column-0 block tags, plain ASCII, why not colour) are
+  the same as the other two reports' templates - see
+  roles/toolchain_report/templates/toolchain-report.j2 for the rationale.
+
+  The two sections read differently, which is why they are sections. A
+  single entry is one line of config and one file, so an operator can check
+  it against the config by eye. A bulk entry is one line of config and an
+  unknown number of files, so the run is the ONLY place its expansion is
+  visible - hence the matched files are grouped under the pattern that
+  named them, with a count. Forty JAR paths with no pattern above them do
+  not tell an operator which line of config to go and edit.
+
+  A group is per PATTERN, not per declared entry, so one glob declared
+  twice with two targetDirs renders as a single group listing both
+  landings. Its count therefore reads "landed", not "matched": the question
+  the report answers is which files reached the VM and where, not how many
+  lines of config asked for them - and every landing is printed either way.
+
+  The header counts statuses only, like both sibling reports. A total would
+  be the sum of the two numbers beside it, and the count that is not
+  derivable from config - how far a glob expanded - belongs on the pattern
+  it expanded from, not in a play-wide total.
+
+  Ordering is stable without sorting anything here: groupby sorts by the
+  grouping key, and within a group the rows keep accumulator order - each
+  declaration's matches, already sorted by source path during resolution.
+#}
+{% set entries = files_report_entries | default([]) %}
+{% set copied = entries | selectattr('status', 'equalto', 'copied') | list %}
+{% set unchanged = entries | selectattr('status', 'equalto', 'unchanged') | list %}
+{# Presence of a pattern is what makes a file "matched" rather than
+   "named" - see defaults/main.yml for why that is not a field of its own. #}
+{% set named = entries | rejectattr('pattern') | list %}
+{% set matched = entries | selectattr('pattern') | list %}
+Files report for {{ inventory_hostname }} -- {{ copied | length }} copied, {{ unchanged | length }} unchanged
+{% if not entries %}
+  (no file entries were declared - nothing was copied here)
+{% endif %}
+{% if named %}
+section 1 - named files (one declared entry, one file)
+{% for entry in named %}
+  {{ "%-9s" | format(entry.status) }} {{ entry.target }}  {{ entry.owner }}:{{ entry.group }} {{ entry.mode }}
+      source  {{ entry.source }}
+{% endfor %}
+{% endif %}
+{% if matched %}
+section 2 - glob matched files (one declared entry, every file it named)
+{% for pattern, rows in matched | groupby('pattern') %}
+  pattern {{ pattern }} -- {{ rows | length }} landed
+{% for entry in rows %}
+    {{ "%-9s" | format(entry.status) }} {{ entry.target }}  {{ entry.owner }}:{{ entry.group }} {{ entry.mode }}
+        source  {{ entry.source }}
+{% endfor %}
+{% endfor %}
+{% endif %}

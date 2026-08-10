@@ -735,8 +735,8 @@ symptom-to-diagnosis table are in the
 
 ### Shared report plumbing (report_render)
 
-[`roles/report_render`](roles/report_render/) is the tail both report roles
-delegate to. A report role owns its template and its entry contract; this
+[`roles/report_render`](roles/report_render/) is the tail every report role
+delegates to. A report role owns its template and its entry contract; this
 one owns the three non-obvious mechanics of getting rendered text in front
 of an operator - `splitlines()` rather than a `split('\n')` filter (the
 escape does not survive Ansible's templating), a list of lines rather than

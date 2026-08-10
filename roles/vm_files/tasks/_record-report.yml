@@ -1,0 +1,51 @@
+---
+# Append what the transport just did to the play-wide files report
+# accumulator (files_report_entries), which the files_report role renders
+# once per host at the end of the play.
+#
+# Separate from the transport because it is a different responsibility: the
+# transport decides what lands, this file decides what an operator is told
+# about it. The projection is one-to-one - one report entry per copied
+# file, never per declared entry - because a bulk entry's whole point is
+# that one line of config becomes an unknown number of files, and "which
+# files, and where did each of them land" is the question the PowerShell
+# engine never answered.
+#
+# Status is only knowable HERE, at the copy: `changed` is the one moment
+# the "this run wrote it" and "it was already current" cases are
+# distinguishable. A scan of the finished VM sees the file either way.
+#
+# Caller contract (set by _copy-resolved-files.yml):
+#   vm_files_copied  the copy loop's results. Each result carries the
+#                    resolved pair it acted on as `.item` and its outcome
+#                    as `.changed`.
+
+# `results` is defaulted because a run with nothing declared still reaches
+# this file: the copy loop ran zero times, which is the no-op promise the
+# role's empty default makes.
+#
+# The noqa is the accumulator convention: files_report_entries is a
+# cross-role contract read by files_report, not a var belonging to this
+# role, and the rationale is documented once in that role's defaults.
+- name: Add every copied file to the files report
+  ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix]
+    files_report_entries: >-
+      {{ (files_report_entries | default([])) + [entry] }}
+  loop: "{{ vm_files_copied.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.target }}"
+  vars:
+    entry:
+      source: "{{ item.item.source }}"
+      target: "{{ item.item.target }}"
+      # Quoted from the same constants the transport applied, so the
+      # report cannot describe a policy the role does not enforce.
+      owner: "{{ vm_files_file_owner }}"
+      group: "{{ vm_files_file_group }}"
+      mode: "{{ vm_files_file_mode }}"
+      status: "{{ item.changed | ternary('copied', 'unchanged') }}"
+      # A resolved pair carries its `pattern` only when a glob produced it,
+      # so its presence IS the entry's origin - no separate field, which is
+      # also the discriminator the entry forms themselves use. Defaulted to
+      # "" rather than omitted so every entry has one shape to read.
+      pattern: "{{ item.item.pattern | default('') }}"

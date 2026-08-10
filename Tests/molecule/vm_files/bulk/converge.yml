@@ -1,0 +1,104 @@
+---
+# Converge - resolve and transport the declared entries.
+#
+# Every entry is declared in one include rather than one per case, because
+# that is how an operator's config carries them and because it proves the
+# entries resolve independently: they share a source tree and two of them
+# share a pattern, so an implementation that let one entry's resolution
+# leak into the next would land files under the wrong target. The single
+# form entry among them is there for the same reason - both forms feed one
+# accumulator.
+#
+# Also what `molecule idempotence` re-runs. Resolution happens on every
+# pass, so a glob whose expansion or ordering was not stable would surface
+# there as a re-copy.
+#
+# include_role (not import_role) defers resolution to runtime so the
+# molecule.yml ANSIBLE_ROLES_PATH override is honoured.
+
+- name: Converge - transport the declared file entries
+  hosts: all
+  gather_facts: false
+  vars:
+    # Every distinct glob the entries declare. Distinct because two of them
+    # share a pattern with different targetDirs, which the report groups
+    # into one block on purpose.
+    declared_patterns: >-
+      {{ fixture_entries | selectattr('pattern', 'defined')
+         | map(attribute='pattern') | unique | sort | list }}
+    single_targets: >-
+      {{ fixture_entries | selectattr('source', 'defined')
+         | map(attribute='target') | list }}
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: vm_files
+      vars:
+        vm_files_entries: "{{ fixture_entries }}"
+
+    # The files report accumulator is asserted HERE rather than in
+    # verify.yml because it is a fact, and molecule's verifier is a
+    # separate ansible-playbook run that cannot see one.
+    #
+    # What this scenario adds over the default one's assertions is the part
+    # only a glob can get wrong: that one declared entry became one report
+    # entry per file it matched, each attributed to the pattern that named
+    # it. Ownership, mode and the status domain are pinned in
+    # Tests/molecule/vm_files/default and are not restated here - two
+    # copies of one expectation are two copies that can disagree.
+    - name: Assert the report accounts for every file a pattern named
+      ansible.builtin.assert:
+        that:
+          # One entry per resolved file, with its VM path - the thing the
+          # PowerShell engine never printed, and the reason a bulk entry
+          # cannot be reported as a single line.
+          - >-
+            files_report_entries | map(attribute='target') | sort | list
+            == expected_files | map(attribute='target') | sort | list
+          # Every glob is represented and nothing invented one: a pattern
+          # that silently contributed no report entry would leave an
+          # operator believing it matched nothing.
+          - >-
+            files_report_entries | map(attribute='pattern') | unique
+            | reject('equalto', '') | sort | list == declared_patterns
+          # The single form entry among them carries no pattern, so the
+          # report cannot attribute a named file to some glob it happens to
+          # sit near - and every other entry must carry one.
+          - >-
+            files_report_entries | rejectattr('pattern')
+            | map(attribute='target') | list == single_targets
+          - >-
+            files_report_entries | selectattr('pattern')
+            | list | length == (expected_files | length) - (single_targets | length)
+        fail_msg: >-
+          the files report accumulator does not account for the resolved
+          files: {{ files_report_entries | default('<unset>') }}
+
+    # Render what the transport just accumulated, which is the one place
+    # producer and template meet on real data: Tests/molecule/files_report
+    # seeds its entries by hand, so a field vm_files stopped emitting would
+    # pass there and surface only in front of an operator. The rendering
+    # itself is asserted in that scenario - failing HERE means the two
+    # halves of the contract no longer fit together.
+    - name: Render the report from the accumulator the transport produced
+      ansible.builtin.include_role:
+        name: files_report
+
+    # One claim about the rendering, made here because this is the only
+    # fixture that can make it: two of the declared entries share a glob
+    # with different targetDirs, so the report must merge them into ONE
+    # group carrying both landings. Everything else about the layout belongs
+    # to Tests/molecule/files_report, and is not restated here.
+    - name: Assert one pattern declared twice renders as one merged group
+      vars:
+        shared_pattern: "{{ fixture_dir }}/sub/*.json"
+      ansible.builtin.assert:
+        that:
+          - files_report_lines | select('search', '^  pattern ')
+            | list | length == declared_patterns | length
+          - >-
+            '  pattern ' ~ shared_pattern ~ ' -- 4 landed'
+            in files_report_lines
+        fail_msg: >-
+          the report did not merge the twice-declared glob into one group:
+          {{ files_report_lines }}

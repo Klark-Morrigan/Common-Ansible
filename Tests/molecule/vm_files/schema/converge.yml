@@ -1,0 +1,37 @@
+---
+# Converge - the positive control: a well-formed entry set covering both
+# forms and every optional bulk sub-field is accepted.
+#
+# It is the half of a strictness test that is easy to lose. A validator
+# that rejected everything would still satisfy the rejection matrix in
+# verify.yml, so something has to prove the contract still admits the
+# shapes the estate actually declares.
+#
+# The entries name real controller-side files - this scenario's own
+# playbooks, reached through playbook_dir - so the accepted case is one
+# that could genuinely be transported, not merely one that is well shaped.
+#
+# include_role (not import_role) defers resolution to runtime so the
+# molecule.yml ANSIBLE_ROLES_PATH override is honoured.
+
+- name: Converge - accept a well-formed vm_files entry set
+  hosts: all
+  gather_facts: false
+  vars:
+    vm_files_entries:
+      - source: "{{ playbook_dir }}/converge.yml"
+        target: /opt/vm-files-schema/converge.yml
+      - pattern: "{{ playbook_dir }}/*.yml"
+        targetDir: /opt/vm-files-schema/bulk
+        recurse: false
+        preserveRelativePath: false
+      # The same bulk entry with both optional flags omitted. Absent is
+      # legal and means false, and that is a distinct code path from a
+      # flag supplied as false - without this entry a rule that rejected
+      # an absent flag outright would pass every case in this scenario.
+      - pattern: "{{ playbook_dir }}/*.yml"
+        targetDir: /opt/vm-files-schema/bulk-defaults
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: vm_files

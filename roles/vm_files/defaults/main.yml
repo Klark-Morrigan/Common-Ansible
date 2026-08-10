@@ -1,0 +1,47 @@
+---
+# Defaults and the input contract for the vm_files role.
+#
+# The role owns the operator-declared file transport onto a provisioned
+# VM. Its input IS the `files` array of a VM definition, reproduced field
+# for field: the estate already speaks this schema, so the two entry
+# forms, their sub-field names and their validation rules are ported
+# rather than redesigned. A definition that a consumer's config already
+# carries is valid here unchanged.
+#
+# Required input: none. With the empty default the role is a no-op, so a
+# play can always include it and let config decide whether there is
+# anything to copy.
+#
+# vm_files_entries - the desired file entries. Two forms, discriminated
+# by the presence of `pattern`:
+#
+#   Single form - one named file:
+#     source  (required) path to the file on the CONTROLLER, POSIX and
+#                        absolute-or-relative-to-the-controller. Windows
+#                        drive letters are translated by the consumer
+#                        before dispatch, which is what keeps this role
+#                        free of any host-topology knowledge.
+#     target  (required) absolute destination path on the VM.
+#
+#   Bulk form - every file matching a glob:
+#     pattern               (required) controller-side glob, absolute.
+#                           Wildcards: '*' and '?', neither of which
+#                           crosses a path component. Character classes
+#                           ('[ab].jar') are refused - see the role
+#                           README, Bulk resolution.
+#     targetDir             (required) absolute destination directory on
+#                           the VM.
+#     recurse               (optional, default false) descend into
+#                           sub-directories while matching.
+#     preserveRelativePath  (optional, default false) mirror the matched
+#                           sub-tree under targetDir instead of
+#                           flattening every match to its basename.
+#
+# Sub-fields are camelCase because they are config keys parsed out of the
+# VM definition JSON, not Ansible variables.
+#
+# Unknown sub-fields are rejected, matching the strict-by-design posture
+# of every other field in that schema. A silently-ignored `targetdir`
+# typo would hand the operator a run that reported success and copied
+# nothing - the one failure mode a file-transport step must never have.
+vm_files_entries: []

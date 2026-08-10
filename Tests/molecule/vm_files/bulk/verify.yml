@@ -1,0 +1,127 @@
+---
+# Verify - which files each pattern named, and where each of them landed.
+#
+# Three claims, and all three are needed. That the expected files are
+# present with the expected bytes; that the files a pattern must NOT have
+# selected are absent (a resolver that matched too generously satisfies
+# every presence assertion ever written); and that the patterns which must
+# fail outright do fail, naming what the operator has to fix.
+#
+# Ownership and mode are not re-asserted here. Bulk entries reach the same
+# transport the single form does, and Tests/molecule/vm_files/default
+# already pins the policy that transport applies - restating it would give
+# the two scenarios a chance to disagree about it.
+
+- name: Verify - bulk resolution post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    # Each case is a bulk entry that must be refused, paired with the
+    # fragments its diagnostic has to carry. Patterns, not shapes: these
+    # are all well-formed entries that the SCHEMA accepts and resolution
+    # then rejects, which is the distinction the two scenarios split on.
+    vm_files_cases:
+      - name: pattern matches nothing
+        entries:
+          - pattern: "{{ fixture_dir }}/*.nope"
+            targetDir: /opt/vm-files-bulk-rejected
+        expect:
+          - "no files matched pattern"
+          - "{{ fixture_dir }}/*.nope"
+
+      # Directories are dropped at the source, so a pattern that names
+      # only directories has to arrive at the same failure as one that
+      # names nothing at all - not copy a directory, and not succeed
+      # having copied nothing.
+      - name: pattern matches only directories
+        entries:
+          - pattern: "{{ fixture_dir }}/onlydirs/*"
+            targetDir: /opt/vm-files-bulk-rejected
+        expect:
+          - "no files matched pattern"
+
+      # The converge lands these two same-named files apart by mirroring
+      # their sub-tree. Flattened, both claim one VM path - and the second
+      # copy would silently overwrite the first.
+      - name: two matches flatten onto one VM path
+        entries:
+          - pattern: "{{ fixture_dir }}/variants/v*/config.ini"
+            targetDir: /opt/vm-files-bulk-rejected
+        expect:
+          - "onto the same VM path"
+          - "/opt/vm-files-bulk-rejected/config.ini"
+  tasks:
+    - name: Stat every file the patterns had to select
+      ansible.builtin.stat:
+        path: "{{ item.target }}"
+      become: true
+      loop: "{{ expected_files }}"
+      loop_control:
+        label: "{{ item.target }}"
+      register: selected_targets
+
+    - name: Assert every selected file landed as a regular file
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+        fail_msg: >-
+          {{ item.item.target }} is missing or is not a regular file;
+          stat: {{ item.stat }}
+      loop: "{{ selected_targets.results }}"
+      loop_control:
+        label: "{{ item.item.target }}"
+
+    # Content, not merely presence. Two matches landing on one target, or
+    # a match landing under the wrong entry's targetDir, both produce a
+    # file of the right name holding the wrong bytes.
+    - name: Slurp every file the patterns had to select
+      ansible.builtin.slurp:
+        src: "{{ item.target }}"
+      become: true
+      loop: "{{ expected_files }}"
+      loop_control:
+        label: "{{ item.target }}"
+      register: selected_content
+
+    - name: Assert every selected file holds its own source fixture bytes
+      ansible.builtin.assert:
+        that:
+          - >-
+            (item.content | b64decode)
+            == 'vm_files bulk fixture ' ~ item.item.fixture
+        fail_msg: >-
+          {{ item.item.target }} should hold {{ item.item.fixture }};
+          it holds: {{ item.content | b64decode }}
+      loop: "{{ selected_content.results }}"
+      loop_control:
+        label: "{{ item.item.target }}"
+
+    - name: Stat every path the patterns must not have selected
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      become: true
+      loop: "{{ absent_targets }}"
+      register: unselected_targets
+
+    - name: Assert nothing was placed at the paths the patterns exclude
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists
+        fail_msg: >-
+          {{ item.item }} exists, so the pattern that must have excluded
+          it selected it instead; stat: {{ item.stat }}
+      loop: "{{ unselected_targets.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # Reuses the schema scenario's helper: a case that must be refused is
+    # asserted the same way whether the rule lives in validation or in
+    # resolution - apply the real role, require it to fail, and require
+    # the failure to name what an operator has to go and fix.
+    - name: Assert each unresolvable bulk entry is rejected
+      ansible.builtin.include_tasks: ../tasks/_assert-entry-rejected.yml
+      loop: "{{ vm_files_cases }}"
+      loop_control:
+        loop_var: vm_files_case
+        label: "{{ vm_files_case.name }}"

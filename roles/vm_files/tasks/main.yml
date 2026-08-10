@@ -1,0 +1,84 @@
+---
+# Validate every declared file entry before any transport happens.
+#
+# The validation is the role's own, not something inherited from a caller
+# that may not have run one: this role is a provisioning vector in its own
+# right, so an operator typo has to die here rather than surface as a
+# half-copied VM. Doing it up front - before the first byte crosses the
+# connection - also means a rejected run leaves the target exactly as it
+# found it.
+#
+# The shape rules are ported from the PowerShell engine that owns the same
+# `files` schema (Infrastructure.HyperV: Assert-VmFilesField and its
+# single/bulk asserts), so a definition is accepted or rejected identically
+# whichever engine runs it. The split below mirrors that structure - a
+# dispatcher that discriminates the two forms, plus one file per form -
+# for the same reason it exists there: the forms evolve independently.
+#
+# Validation done, the role resolves the declared entries into flat
+# source/target pairs and hands that one list to a single transport. The
+# two forms differ only in how many pairs they produce - a single entry is
+# already a pair, a bulk one expands to as many as its glob matches - so
+# keeping resolution and transport apart is what stops the ownership
+# policy from being stated (and drifting) once per form.
+#
+# Transport done, what it did is recorded in the play-wide files report
+# accumulator for the files_report role to render. Recording is its own
+# step for the same reason: what lands and what the operator is told about
+# it are different concerns.
+
+- name: Assert the declared file entries are a list
+  ansible.builtin.assert:
+    that:
+      # A bare string and a mapping both satisfy Jinja's `sequence` test,
+      # and both are plausible mistakes (a single entry written without
+      # its enclosing list), so each is excluded explicitly.
+      - vm_files_entries is sequence
+      - vm_files_entries is not string
+      - vm_files_entries is not mapping
+    fail_msg: >-
+      vm_files_entries must be a list of file entries
+      (got '{{ vm_files_entries }}').
+
+- name: Assert each declared file entry is well formed
+  ansible.builtin.include_tasks: _assert-entry.yml
+  loop: "{{ vm_files_entries }}"
+  loop_control:
+    loop_var: vm_files_entry
+    index_var: vm_files_entry_index
+    # The entry itself is not a usable label - it may be any shape at all
+    # at this point, including the malformed ones this loop exists to
+    # reject - so the label is its position, which is also what every
+    # rejection message names.
+    label: "vm_files_entries[{{ vm_files_entry_index }}]"
+
+# The single form already IS a source/target pair, so resolving it is a
+# filter and nothing more. Selecting on `source` is what discriminates the
+# form here, and it is exact rather than merely convenient: the validation
+# above has already rejected any entry carrying both discriminators or
+# neither.
+#
+# This is also what seeds the accumulator the bulk pass appends to, so it
+# runs first whether or not any single entry was declared.
+- name: Resolve the single form file entries to source and target pairs
+  ansible.builtin.set_fact:
+    vm_files_resolved: >-
+      {{ vm_files_entries | selectattr('source', 'defined') | list }}
+
+# A bulk entry expands to one pair per matched file, so each is resolved
+# on its own and appends what it matched. Resolving every entry before
+# copying anything is deliberate: a pattern that names nothing, or two
+# matches claiming one VM path, aborts the run with the target untouched
+# rather than half-populated.
+- name: Resolve the bulk form file entries to source and target pairs
+  ansible.builtin.include_tasks: _resolve-bulk-entry.yml
+  loop: "{{ vm_files_entries | selectattr('pattern', 'defined') | list }}"
+  loop_control:
+    loop_var: vm_files_bulk_entry
+    label: "{{ vm_files_bulk_entry.pattern }}"
+
+- name: Copy every resolved file onto the VM
+  ansible.builtin.include_tasks: _copy-resolved-files.yml
+
+- name: Record what the transport did in the files report
+  ansible.builtin.include_tasks: _record-report.yml
