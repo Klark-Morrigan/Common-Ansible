@@ -107,6 +107,23 @@
         expect:
           - ".pattern must be a non-empty string"
 
+      # The two rules the Ansible engine adds to the ported set. Both
+      # exist so that a pattern this engine cannot resolve the way the
+      # PowerShell one would is refused rather than resolved differently.
+      - name: bulk form entry pattern is relative
+        entries:
+          - pattern: "jars/*.jar"
+            targetDir: /opt/app
+        expect:
+          - ".pattern must be an absolute controller-side path"
+
+      - name: bulk form entry pattern uses a character class wildcard
+        entries:
+          - pattern: "/opt/[ab].jar"
+            targetDir: /opt/app
+        expect:
+          - "unsupported wildcard"
+
       - name: bulk form entry is missing targetDir
         entries:
           - pattern: /opt/*.jar

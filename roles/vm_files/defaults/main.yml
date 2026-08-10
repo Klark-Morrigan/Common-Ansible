@@ -24,7 +24,11 @@
 #     target  (required) absolute destination path on the VM.
 #
 #   Bulk form - every file matching a glob:
-#     pattern               (required) controller-side glob.
+#     pattern               (required) controller-side glob, absolute.
+#                           Wildcards: '*' and '?', neither of which
+#                           crosses a path component. Character classes
+#                           ('[ab].jar') are refused - see the role
+#                           README, Bulk resolution.
 #     targetDir             (required) absolute destination directory on
 #                           the VM.
 #     recurse               (optional, default false) descend into

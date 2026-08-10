@@ -1,0 +1,41 @@
+---
+# Prepare - build the controller-side tree the converge's patterns are cut
+# out of.
+#
+# The tree is built here rather than committed to the repo because the
+# cases turn on the SHAPE of a source tree (depth, sibling directories with
+# colliding basenames, a directory with no files below it), and a shape
+# spread across a checkout is one an unrelated change can quietly alter.
+#
+# Each file's content is derived from its path within the tree, so the
+# verifier can assert the exact bytes at every destination - which is what
+# makes "two matches landed on one target" a failure rather than something
+# that passes because a file of the right name exists.
+
+- name: Prepare - build the controller side fixture tree
+  hosts: all
+  gather_facts: false
+  tasks:
+    # Every directory the tree needs, in one declaration: the parents the
+    # fixture files sit in, plus the file-less directories that exist only
+    # to be matched. `select` drops the empty dirname of a file at the
+    # root of the tree.
+    - name: Create the controller side fixture directories
+      ansible.builtin.file:
+        path: "{{ fixture_dir }}/{{ item }}"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+      become: false
+      loop: >-
+        {{ ((fixture_files | map('dirname') | list) + fixture_dirs)
+           | select | unique | list }}
+
+    - name: Write the controller side fixture files
+      ansible.builtin.copy:
+        dest: "{{ fixture_dir }}/{{ item }}"
+        content: "vm_files bulk fixture {{ item }}"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      loop: "{{ fixture_files }}"

@@ -10,15 +10,12 @@ redesigned: a definition a consumer's config already carries is valid here
 unchanged, and is accepted or rejected identically whichever engine runs
 it.
 
-**TODO: bulk transport.** The single form is transported; the bulk form
-is validated and then expands to nothing, so a play declaring a `pattern`
-entry copies no files for it yet.
-
 ## Index
 
 - [Entry contract](#entry-contract)
 - [Why the role validates its own input](#why-the-role-validates-its-own-input)
 - [What is deliberately not validated](#what-is-deliberately-not-validated)
+- [Bulk resolution](#bulk-resolution)
 - [Transport](#transport)
 - [Consuming this role](#consuming-this-role)
 - [Tests](#tests)
@@ -33,12 +30,12 @@ a list of entries in one of two forms, discriminated by the presence of
 | Form | Sub-fields | Meaning |
 | --- | --- | --- |
 | Single | `source`, `target` | One named controller-side file, copied to one absolute path on the VM |
-| Bulk | `pattern`, `targetDir`, optional `recurse`, optional `preserveRelativePath` | Every controller-side file matching a glob, copied under one absolute directory on the VM |
+| Bulk | `pattern`, `targetDir`, optional `recurse`, optional `preserveRelativePath` | Every controller-side file matching an absolute glob, copied under one absolute directory on the VM |
 
 Sub-fields are camelCase because they are config keys parsed out of the VM
 definition JSON, not Ansible variables.
 
-Paths are POSIX and controller-relative. A Windows-hosted estate
+Source paths are POSIX and name files on the controller. A Windows-hosted estate
 translates its drive letters *before* dispatch, which is what keeps this
 role free of any host-topology knowledge and testable in a plain
 container.
@@ -72,6 +69,7 @@ there too - the two forms evolve independently:
 | [`tasks/_assert-entry.yml`](tasks/_assert-entry.yml) | Checks shared by both forms, and the discrimination between them |
 | [`tasks/_assert-single-entry.yml`](tasks/_assert-single-entry.yml) | Single-form rules |
 | [`tasks/_assert-bulk-entry.yml`](tasks/_assert-bulk-entry.yml) | Bulk-form rules |
+| [`tasks/_resolve-bulk-entry.yml`](tasks/_resolve-bulk-entry.yml) | Expanding one glob into source/target pairs |
 | [`tasks/_copy-resolved-files.yml`](tasks/_copy-resolved-files.yml) | The transport, shared by both forms |
 
 The allow-lists the unknown-sub-field rules read live in
@@ -87,7 +85,56 @@ cannot widen one locally and fork the schema.
   still present a minute later.
 - **That a `pattern` matches anything.** A glob is time-varying; the
   resolution the transport performs is the only one whose answer is still
-  true when the files are read.
+  true when the files are read. A pattern naming nothing is still a hard
+  failure - it just happens one step later, in
+  [bulk resolution](#bulk-resolution). What validation does check is that
+  the pattern is one this engine can resolve at all.
+
+## Bulk resolution
+
+A bulk entry is expanded on the **controller**, where the sources live,
+and the pairs it produces go to the same transport the single form uses.
+Expansion happens at transport time rather than at validation time
+because a glob is time-varying: the only resolution whose answer is still
+true when the bytes are read is the one the transport is about to act on.
+
+The rules are ported from the PowerShell engine's resolver, so a pattern
+names the same files and lands them on the same VM paths whichever engine
+runs it:
+
+| Rule | Behaviour |
+| --- | --- |
+| Anchor | The search starts at the longest run of leading path components carrying no wildcard, cut at a **component boundary**: `/src/foo*/x` anchors at `/src`, never at `/src/foo` |
+| Directories | Dropped at the source, so a pattern matching only directories reaches the zero-match failure rather than copying one |
+| Zero matches | A hard failure naming the pattern. The entry was declared because those files are expected on the VM, so copying none of them and reporting success is not an outcome |
+| `preserveRelativePath: false` | Every match flattens to `targetDir/<basename>` |
+| `preserveRelativePath: true` | Every match keeps its path relative to the anchor, mirrored under `targetDir` |
+| `recurse` | Widens the filename half of the pattern to any depth below its container, matching `Get-ChildItem -Recurse` |
+| Collisions | Two matches claiming one VM path is a hard failure. Left undetected the second copy would silently overwrite the first, in either mode - flatten-mode basename collisions across sub-directories, and preserve-mode collapses, surface the same way |
+
+Matching is one expression applied to whole paths. Ansible's `find` is
+used purely to enumerate candidates, rather than being handed the
+filename half of the job through its own globbing: two matchers that have
+to agree are two matchers that can disagree, and `find` cannot express
+the container half of a pattern (`foo*/x`) anyway.
+
+Two constraints this engine adds, both refusals where the alternative
+would be a **silent** divergence - a definition that copies one set of
+files under one engine and a different set under the other:
+
+- **The pattern must be absolute.** A relative one resolves against the
+  controller's working directory, which is chosen by whichever bridge
+  launched the play, so an operator's config cannot mean anything stable
+  by it.
+- **Character classes (`[ab].jar`) are refused.** PowerShell expands
+  them; this engine does not. Left alone the pattern would still match
+  *something* here - a file genuinely named `[ab].jar` - so it is
+  rejected outright. Supported wildcards are `*` and `?`, neither of
+  which crosses a path component.
+
+Matches are sorted, so the order files are copied in - and reported in -
+is the same on every run and on every controller rather than whatever
+order the filesystem walk produced.
 
 ## Transport
 
@@ -153,6 +200,35 @@ policy is applied rather than merely inherited. One entry per case:
 | No entries declared | The no-op promise above holds, rather than tripping over an empty loop's register |
 
 `molecule idempotence` covers the re-run.
+
+`Tests/molecule/vm_files/bulk` covers resolution. One controller-side
+fixture tree is built in `prepare.yml` and every case is a different
+subset cut out of it - a per-case tree holding only the expected matches
+would prove nothing about what a pattern leaves behind:
+
+| Case | What it pins down |
+| --- | --- |
+| Flatten, shallow | Only the extension asked for, only the top level, and a trailing separator on `targetDir` tolerated |
+| Flatten, recursive | Basenames from two different depths land side by side |
+| Preserve, recursive | The same match set mirrors its sub-tree instead, so the flag is the only difference between the two targets |
+| Wildcard mid-pattern | The anchor is the component boundary: `variants/v*/config.ini` lands `v1/...` and `v2/...`, not `1/...` and `2/...` |
+| Files and directories matched | The directories are dropped, so exactly the files land |
+| Pattern matching nothing | Refused, naming the pattern |
+| Pattern matching only directories | Refused the same way, rather than copying a directory or succeeding empty |
+| Two matches, one VM path | Refused, naming the contested path and pointing at `preserveRelativePath` |
+
+Every case asserts the bytes at each destination, not merely a file of
+the right name: two matches landing on one target, or a match landing
+under the wrong entry's `targetDir`, both produce a plausible-looking
+file. The paths a pattern must **not** have selected are asserted absent
+too, since a resolver that matched too generously satisfies every
+presence assertion ever written. `molecule idempotence` covers the
+re-run, which for this scenario also means the expansion is stable.
+
+The refusals reuse the schema scenario's helper: whether an entry is
+rejected by a shape rule or by a pattern that resolves to nothing, the
+run must fail and the failure must name what an operator has to go and
+fix.
 
 `Tests/molecule/vm_files/schema` covers the contract from both sides. Its
 `converge.yml` is the positive control - a well-formed entry set using

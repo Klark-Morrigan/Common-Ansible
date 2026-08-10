@@ -1,0 +1,186 @@
+---
+# Bulk resolution - expand ONE glob entry into source/target pairs.
+#
+# Ported from the PowerShell engine's Resolve-VmFileEntries so that a
+# pattern names the same files and lands them on the same VM paths
+# whichever engine runs it. That parity is the whole point of this file:
+# the two forms of divergence it exists to prevent are matching a
+# different set of files, and matching the same set but landing them
+# somewhere else.
+#
+# Everything here happens on the CONTROLLER, where the sources live. The
+# pairs it produces go to the same transport the single form uses, so
+# nothing about ownership or parent-directory handling is restated.
+#
+# Resolution happens now rather than during validation because a glob is
+# time-varying: the only resolution whose answer is still true when the
+# bytes are read is the one the transport is about to act on. A pattern
+# that names nothing therefore fails HERE, not earlier.
+#
+# Caller contract (set by main.yml):
+#   vm_files_bulk_entry  a validated bulk-form entry: pattern, targetDir,
+#                        and the optional recurse / preserveRelativePath
+#                        flags. Validation has already established that
+#                        the pattern is absolute and carries no wildcard
+#                        this file cannot expand.
+#   vm_files_resolved    the accumulating source/target pair list, which
+#                        this file appends this entry's matches to.
+
+# The anchor is where the controller-side search starts AND what
+# preserveRelativePath measures each match against, which is why it is
+# derived once. It is cut at a component boundary so it is always a real
+# directory: '/src/foo*/x' anchors at '/src', never at '/src/foo'.
+#
+# The final component is dropped before the cut because it is always the
+# filename match rather than a directory to search from. Without that, a
+# pattern carrying no wildcard at all would anchor at the file itself and
+# every match would relativise to nothing.
+- name: Anchor the bulk pattern at its longest wildcard free prefix
+  ansible.builtin.set_fact:
+    vm_files_bulk_anchor: >-
+      {{ (vm_files_bulk_entry.pattern | split('/'))[:-1] | join('/')
+         | regex_replace(vm_files_anchor_cut_re, '') }}
+
+# An empty anchor means the pattern wildcards its very first component
+# below the filesystem root ('/​*.jar'), so the search starts at '/'.
+#
+# The strip expression turns any absolute path under the anchor into its
+# anchor-relative form. Two callers need exactly that: the pattern itself
+# becomes the glob to match below the anchor, and each matched file
+# becomes the sub-tree preserveRelativePath mirrors.
+- name: Derive the search root and the anchor relative path expression
+  ansible.builtin.set_fact:
+    vm_files_bulk_search_path: "{{ vm_files_bulk_anchor | default('/', true) }}"
+    vm_files_bulk_anchor_strip_re: >-
+      ^{{ vm_files_bulk_anchor | regex_escape }}/?
+
+# Matching is done by one expression applied to full paths, rather than by
+# handing part of the job to `find`'s own basename globbing. Two matchers
+# that have to agree are two matchers that can disagree, and `find` cannot
+# express the container half of a pattern anyway ('foo*/x'), so `find` is
+# left as a pure enumerator and every matching decision is made here.
+#
+# The glob is split at its last separator because `recurse` widens only
+# the filename half: Get-ChildItem -Recurse applies the leaf as a filename
+# filter at EVERY level below the container, which '(?:[^/]+/)*' is.
+#
+# Each half is tokenised into wildcards and literal runs; a wildcard maps
+# through vm_files_wildcard_regexes and a literal run through regex_escape.
+#
+# `find` is told to recurse whenever matches can lie below the anchor's
+# immediate children - because the caller asked for it, or because the
+# pattern's own container half puts them there. Otherwise it stays shallow
+# rather than walking a tree whose every result the expression would
+# reject.
+- name: Derive the expression that decides which found files match
+  vars:
+    vm_files_bulk_recurse: "{{ vm_files_bulk_entry.recurse | default(false) }}"
+    vm_files_bulk_glob_parts: >-
+      {{ (vm_files_bulk_entry.pattern
+          | regex_replace(vm_files_bulk_anchor_strip_re, '')).rsplit('/', 1) }}
+  ansible.builtin.set_fact:
+    vm_files_bulk_search_recurse: >-
+      {{ vm_files_bulk_recurse or vm_files_bulk_glob_parts | length > 1 }}
+    vm_files_bulk_match_re: |-
+      ^{{ vm_files_bulk_anchor | regex_escape }}/?
+      {%- for vm_files_glob_part in vm_files_bulk_glob_parts %}
+        {%- if not loop.first %}/{% endif %}
+        {%- if loop.last and vm_files_bulk_recurse %}(?:[^/]+/)*{% endif %}
+        {%- for vm_files_glob_token in
+                vm_files_glob_part | regex_findall(vm_files_glob_token_re) %}
+          {{- vm_files_wildcard_regexes[vm_files_glob_token]
+              | default(vm_files_glob_token | regex_escape) }}
+        {%- endfor %}
+      {%- endfor %}$
+
+# file_type drops directories at the source, so a pattern matching only
+# directories arrives at the zero-match failure below rather than trying
+# to copy one.
+#
+# hidden: dot-prefixed names are matched like any other. The estate's
+# sources sit on a Windows volume where a leading dot carries no hidden
+# attribute and the PowerShell engine therefore matches them, so skipping
+# them here would be a divergence rather than a convention.
+- name: Find every candidate file below the search root
+  ansible.builtin.find:
+    paths: "{{ vm_files_bulk_search_path }}"
+    file_type: file
+    hidden: true
+    recurse: "{{ vm_files_bulk_search_recurse }}"
+  delegate_to: localhost
+  become: false
+  register: vm_files_bulk_found
+
+# Sorted so that the order files are copied in - and reported in - is the
+# same on every run and on every controller, rather than whatever order
+# the filesystem walk happened to produce.
+- name: Keep the found files the pattern actually names
+  ansible.builtin.set_fact:
+    vm_files_bulk_sources: >-
+      {{ vm_files_bulk_found.files | map(attribute='path')
+         | select('match', vm_files_bulk_match_re) | sort | list }}
+    vm_files_bulk_pairs: []
+
+# A pattern that names nothing is an operator error, not an empty set to
+# proceed with: the entry was declared because those files are expected on
+# the VM, so a run that quietly copied none of them and reported success
+# is the failure mode this whole role is written to avoid.
+- name: Assert the bulk pattern matched at least one file
+  ansible.builtin.assert:
+    that:
+      - vm_files_bulk_sources | length > 0
+    fail_msg: >-
+      no files matched pattern '{{ vm_files_bulk_entry.pattern }}'
+      (searched '{{ vm_files_bulk_search_path }}',
+      recurse={{ vm_files_bulk_search_recurse }}). A pattern matching only
+      directories counts as no match.
+
+# preserveRelativePath mirrors each match's sub-tree below the anchor;
+# without it every match flattens onto its basename. The trailing
+# separator a targetDir may carry is stripped so the join below cannot
+# produce a doubled one.
+- name: Pair every matched file with the path it lands on
+  vars:
+    vm_files_bulk_target_dir: >-
+      {{ vm_files_bulk_entry.targetDir | regex_replace('/+$', '') }}
+  ansible.builtin.set_fact:
+    vm_files_bulk_pairs: >-
+      {{ vm_files_bulk_pairs + [{
+           'source': item,
+           'target': vm_files_bulk_target_dir ~ '/' ~ (
+             (vm_files_bulk_entry.preserveRelativePath | default(false))
+             | ternary(item | regex_replace(vm_files_bulk_anchor_strip_re, ''),
+                       item | basename)) }] }}
+  loop: "{{ vm_files_bulk_sources }}"
+  loop_control:
+    label: "{{ item }}"
+
+# One check covers both modes: a flatten-mode basename collision between
+# two sub-directories and a preserve-mode collapse both surface as two
+# matches claiming one VM path. Left undetected, the pair copied second
+# would silently overwrite the first and the run would report success.
+- name: Assert no two matched files land on the same VM path
+  vars:
+    vm_files_bulk_targets: >-
+      {{ vm_files_bulk_pairs | map(attribute='target') | list }}
+    # Jinja has no "the duplicates of" filter, so each distinct target is
+    # counted back into the full list. Only the message needs this; the
+    # condition itself is a length comparison.
+    vm_files_bulk_duplicate_targets: |-
+      {%- for vm_files_target in vm_files_bulk_targets | unique %}
+      {%- if vm_files_bulk_targets.count(vm_files_target) > 1 %}
+      {{- vm_files_target }} {% endif %}
+      {%- endfor %}
+  ansible.builtin.assert:
+    that:
+      - vm_files_bulk_targets | length == vm_files_bulk_targets | unique | length
+    fail_msg: >-
+      pattern '{{ vm_files_bulk_entry.pattern }}' resolves two or more
+      matched files onto the same VM path(s):
+      '{{ vm_files_bulk_duplicate_targets | trim }}'. Set
+      preserveRelativePath to keep matches from different directories
+      apart.
+
+- name: Add this entry's pairs to the resolved source and target pairs
+  ansible.builtin.set_fact:
+    vm_files_resolved: "{{ vm_files_resolved + vm_files_bulk_pairs }}"

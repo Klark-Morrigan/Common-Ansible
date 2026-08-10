@@ -1,0 +1,25 @@
+---
+# Converge - resolve and transport the declared bulk form entries.
+#
+# All five entries are declared in one include rather than one per case,
+# because that is how an operator's config carries them and because it
+# proves the entries resolve independently: they share a source tree and
+# two of them share a pattern, so an implementation that let one entry's
+# resolution leak into the next would land files under the wrong target.
+#
+# Also what `molecule idempotence` re-runs. Resolution happens on every
+# pass, so a glob whose expansion or ordering was not stable would surface
+# there as a re-copy.
+#
+# include_role (not import_role) defers resolution to runtime so the
+# molecule.yml ANSIBLE_ROLES_PATH override is honoured.
+
+- name: Converge - transport the declared bulk form file entries
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: vm_files
+      vars:
+        vm_files_entries: "{{ fixture_entries }}"

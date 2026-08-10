@@ -33,6 +33,39 @@
       {{ vm_files_entry_ctx }}.pattern must be a non-empty string
       (a controller-side glob).
 
+# Two constraints this engine adds to the ported rules. Both are refusals
+# where the alternative would be a SILENT divergence from the PowerShell
+# engine that owns the same schema, which is the one thing a parity port
+# must not produce - a definition that copies one set of files under one
+# engine and a different set under the other.
+#
+# Absolute: a relative pattern resolves against the controller's working
+# directory, which is chosen by whichever bridge launched the play. An
+# operator's config cannot mean anything stable by it.
+#
+# Character class ('[ab].jar'): PowerShell expands it, this engine does
+# not. Left alone it would still match SOMETHING here - a file genuinely
+# named '[ab].jar' - so it is refused rather than quietly resolved to the
+# wrong set of files.
+- name: Assert the bulk form file entry pattern is an absolute path
+  ansible.builtin.assert:
+    that:
+      - vm_files_entry.pattern.startswith('/')
+    fail_msg: >-
+      {{ vm_files_entry_ctx }}.pattern must be an absolute controller-side
+      path, starting with '/' (got '{{ vm_files_entry.pattern }}').
+
+- name: Assert the bulk form file entry pattern uses no character class
+  ansible.builtin.assert:
+    that:
+      - vm_files_unsupported_wildcard not in vm_files_entry.pattern
+    fail_msg: >-
+      {{ vm_files_entry_ctx }}.pattern uses the unsupported wildcard
+      '{{ vm_files_unsupported_wildcard }}' (character class), which this
+      engine does not expand
+      (got '{{ vm_files_entry.pattern }}'). Supported wildcards:
+      {{ vm_files_wildcard_chars | list | join(', ') }}.
+
 - name: Assert the bulk form file entry declares a targetDir
   ansible.builtin.assert:
     that:

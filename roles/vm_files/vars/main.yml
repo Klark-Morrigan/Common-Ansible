@@ -29,3 +29,40 @@ vm_files_bulk_flag_fields:
 
 vm_files_bulk_allowed_fields: >-
   {{ vm_files_bulk_required_fields + vm_files_bulk_flag_fields }}
+
+# The glob wildcards the bulk resolver expands, each mapped to what it
+# means as a regular expression. Resolution turns a pattern into one
+# expression and matches candidate paths against it, so this mapping is
+# the whole definition of what a wildcard does: neither crosses a path
+# component, which is what stops 'foo*' from reaching into a
+# sub-directory.
+#
+# One mapping rather than a list plus a translation step, because every
+# rule below is derived from it - admitting a new wildcard here teaches
+# the anchor rule, the tokeniser and the expansion about it at once.
+vm_files_wildcard_regexes:
+  "*": "[^/]*"
+  "?": "[^/]"
+
+vm_files_wildcard_chars: "{{ vm_files_wildcard_regexes.keys() | join }}"
+
+# Cuts a path at the first component containing a wildcard, and at the
+# component boundary before it: '/src/foo*/x' loses '/foo*/x' and anchors
+# at '/src', never at '/src/foo'. Anchoring mid-component would relativise
+# matches against a prefix that is not a directory, which is exactly the
+# case PreserveRelativePath has to get right.
+vm_files_anchor_cut_re: "(^|/)[^/]*[{{ vm_files_wildcard_chars }}].*$"
+
+# Splits a glob into an alternating run of wildcards and literal text, so
+# each token is either a key of the mapping above or a literal to escape.
+# Tokenising beats escaping-then-unescaping: the literal runs never have
+# to be un-escaped again, so nothing has to know how regex_escape spells
+# things.
+vm_files_glob_token_re: >-
+  [{{ vm_files_wildcard_chars }}]|[^{{ vm_files_wildcard_chars }}]+
+
+# The one wildcard PowerShell's Get-ChildItem expands that this engine
+# does not: a character class ('[ab].jar'). Refused outright rather than
+# treated as a literal - see _assert-bulk-entry.yml for why silence would
+# be the worse failure.
+vm_files_unsupported_wildcard: "["

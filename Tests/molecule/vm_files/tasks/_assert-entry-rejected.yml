@@ -1,18 +1,24 @@
 ---
-# Applies the vm_files role to ONE malformed entry set and asserts it
-# refuses, exercising the real role rather than a copy of its rules.
+# Applies the vm_files role to ONE entry set the role has to refuse, and
+# asserts it does, exercising the real role rather than a copy of its
+# rules.
+#
+# Shared by the schema and bulk scenarios, because the two kinds of
+# refusal deserve the same treatment: whether an entry is rejected by a
+# shape rule or by a pattern that resolves to nothing, the run must fail
+# and the failure must name what an operator has to go and fix.
 #
 # Lives in its own file because `loop` is not a valid attribute on a
 # block - the caller loops over an include of this file instead.
 #
 # Caller contract:
 #   vm_files_case.name     what the case is called in failure output.
-#   vm_files_case.entries  the malformed value to feed vm_files_entries.
+#   vm_files_case.entries  the value to feed vm_files_entries.
 #   vm_files_case.expect   fragments the rejection must contain - the rule
 #                          that was violated, and where relevant the
-#                          position of the offending entry.
+#                          position or pattern of the offending entry.
 
-- name: Assert the malformed entry set is rejected
+- name: Assert the entry set is rejected
   vars:
     vm_files_entries: "{{ vm_files_case.entries }}"
   block:
@@ -22,10 +28,10 @@
 
     # Reached only when no assert in the role fired, which is the
     # regression this whole file exists to catch.
-    - name: Fail if the role accepted the malformed entry set
+    - name: Fail if the role accepted the entry set
       ansible.builtin.fail:
         msg: >-
-          vm_files accepted the malformed case
+          vm_files accepted the case
           '{{ vm_files_case.name }}': {{ vm_files_case.entries }}
   rescue:
     # Distinguish "rejected for the right reason" from any other failure -
