@@ -3,7 +3,6 @@
 ## Index
 
 - [Summary](#summary)
-- [For laymen](#for-laymen)
 - [Background](#background)
 - [What is changing](#what-is-changing)
 - [The scenarios do not currently pass](#the-scenarios-do-not-currently-pass)
@@ -37,18 +36,6 @@ as a second job in the Ansible-domain `ci-ansible.yml` workflow that
 in **Common-Ansible** (the Ansible controller repo, which already owns
 the toolchain molecule needs), consumed by every repo that contains
 roles.
-
-## For laymen
-
-Spell-checking a recipe tells you the words are spelled right; it does
-not tell you the cake comes out edible. Our Ansible roles get the
-spell-check (lint) on every change, but nobody is actually baking the
-cake to confirm it works - that is what "molecule" does: it spins up a
-throwaway machine, runs the role for real, and checks the result. Right
-now that test exists but is never run automatically, and it does not even
-work on the current setup. This change repairs the test and wires it into
-the automatic checks, so a role that looks fine but behaves wrongly gets
-caught before it ships.
 
 ## Background
 
