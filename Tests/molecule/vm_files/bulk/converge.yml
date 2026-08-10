@@ -19,9 +19,67 @@
 - name: Converge - transport the declared file entries
   hosts: all
   gather_facts: false
+  vars:
+    # Every distinct glob the entries declare. Distinct because two of them
+    # share a pattern with different targetDirs, which the report groups
+    # into one block on purpose.
+    declared_patterns: >-
+      {{ fixture_entries | selectattr('pattern', 'defined')
+         | map(attribute='pattern') | unique | sort | list }}
+    single_targets: >-
+      {{ fixture_entries | selectattr('source', 'defined')
+         | map(attribute='target') | list }}
   tasks:
     - name: Include the role under test
       ansible.builtin.include_role:
         name: vm_files
       vars:
         vm_files_entries: "{{ fixture_entries }}"
+
+    # The files report accumulator is asserted HERE rather than in
+    # verify.yml because it is a fact, and molecule's verifier is a
+    # separate ansible-playbook run that cannot see one.
+    #
+    # What this scenario adds over the default one's assertions is the part
+    # only a glob can get wrong: that one declared entry became one report
+    # entry per file it matched, each attributed to the pattern that named
+    # it. Ownership, mode and the status domain are pinned in
+    # Tests/molecule/vm_files/default and are not restated here - two
+    # copies of one expectation are two copies that can disagree.
+    - name: Assert the report accounts for every file a pattern named
+      ansible.builtin.assert:
+        that:
+          # One entry per resolved file, with its VM path - the thing the
+          # PowerShell engine never printed, and the reason a bulk entry
+          # cannot be reported as a single line.
+          - >-
+            files_report_entries | map(attribute='target') | sort | list
+            == expected_files | map(attribute='target') | sort | list
+          # Every glob is represented and nothing invented one: a pattern
+          # that silently contributed no report entry would leave an
+          # operator believing it matched nothing.
+          - >-
+            files_report_entries | map(attribute='pattern') | unique
+            | reject('equalto', '') | sort | list == declared_patterns
+          # The single form entry among them keeps its own origin, so the
+          # report does not attribute a named file to some pattern it
+          # happens to sit near.
+          - >-
+            files_report_entries | selectattr('origin', 'equalto', 'single')
+            | map(attribute='target') | list == single_targets
+          - >-
+            files_report_entries | selectattr('origin', 'equalto', 'bulk')
+            | list | length == (expected_files | length) - (single_targets | length)
+        fail_msg: >-
+          the files report accumulator does not account for the resolved
+          files: {{ files_report_entries | default('<unset>') }}
+
+    # Render what the transport just accumulated, which is the one place
+    # producer and template meet on real data: Tests/molecule/files_report
+    # seeds its entries by hand, so a field vm_files stopped emitting would
+    # pass there and surface only in front of an operator. The rendering
+    # itself is asserted in that scenario - failing HERE means the two
+    # halves of the contract no longer fit together.
+    - name: Render the report from the accumulator the transport produced
+      ansible.builtin.include_role:
+        name: files_report

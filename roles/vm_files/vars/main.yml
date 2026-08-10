@@ -66,3 +66,24 @@ vm_files_glob_token_re: >-
 # treated as a literal - see _assert-bulk-entry.yml for why silence would
 # be the worse failure.
 vm_files_unsupported_wildcard: "["
+
+# The transport's ownership policy - what every copied file and every
+# directory the role creates ends up as, regardless of what the source
+# carried on the controller. The rationale for the values themselves lives
+# in the role README (Transport).
+#
+# Named here rather than written on the tasks because the report quotes
+# them: an operator reading 'root:root 0644' off the report is reading the
+# same six values the transport applied, so the report cannot claim a
+# policy the role does not enforce.
+#
+# In vars/ for the same reason the schema lists are: the policy is an
+# invariant consumers rely on, so a caller must not be able to override it
+# for one host and quietly land world-writable files everywhere else.
+vm_files_file_owner: root
+vm_files_file_group: root
+vm_files_file_mode: "0644"
+
+vm_files_dir_owner: root
+vm_files_dir_group: root
+vm_files_dir_mode: "0755"

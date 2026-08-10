@@ -1,0 +1,146 @@
+---
+# Verify the rendered report.
+#
+# The verifier is a separate ansible-playbook run, so converge's facts are
+# gone - this play re-includes the role to re-render from the same
+# inventory-seeded entry set, then asserts on files_report_lines. That fact
+# is the role's own output, so the assertions below check exactly the text
+# the operator sees rather than scraping the callback's stdout.
+#
+# Rows are asserted as whole exact lines rather than by searching for
+# fragments. Every path here carries regex metacharacters ('*' in a
+# pattern, '.' in every filename), and an exact line also pins the columns
+# - a target that lost its ownership suffix, or a status that stopped being
+# padded into a column, is a report an operator can no longer scan.
+
+- name: Verify - the files report renders every transported file
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Re-render the report
+      ansible.builtin.include_role:
+        name: files_report
+
+    # The header is the one-glance answer: did this run write anything, or
+    # was the VM already carrying every declared file.
+    - name: Assert the header counts the statuses
+      ansible.builtin.assert:
+        that:
+          - >-
+            files_report_lines[0]
+            == 'Files report for instance -- 3 copied, 2 unchanged'
+        fail_msg: >-
+          header line did not summarise the seeded entries:
+          {{ files_report_lines[0] | default('<no lines>') }}
+
+    - name: Assert both section headings are present
+      ansible.builtin.assert:
+        that:
+          - files_report_lines | select('search', '^section 1 - named files')
+            | list | length == 1
+          - files_report_lines | select('search', '^section 2 - glob matched files')
+            | list | length == 1
+        fail_msg: "section headings missing or duplicated: {{ files_report_lines }}"
+
+    # A named entry renders on one row an operator can compare against the
+    # config by eye: what happened to it, where it is, and what owns it.
+    - name: Assert each named file renders its status target and ownership
+      ansible.builtin.assert:
+        that:
+          - "'  copied    /etc/app/app.conf  root:root 0644' in files_report_lines"
+          - >-
+            '  unchanged /etc/app/logging.json  root:root 0644'
+            in files_report_lines
+        fail_msg: "a named file row did not render: {{ files_report_lines }}"
+
+    # Provenance: every file says where its bytes came from, whether it was
+    # named or matched.
+    - name: Assert every file renders its source path
+      ansible.builtin.assert:
+        that:
+          - files_report_lines
+            | select('search', '^ +source  ') | list | length == 5
+          - "'      source  /mnt/c/estate/app.conf' in files_report_lines"
+          - >-
+            '        source  /mnt/c/estate/jars/alpha.jar'
+            in files_report_lines
+        fail_msg: "a source line did not render: {{ files_report_lines }}"
+
+    # The grouping, and the count that makes an expansion checkable at a
+    # glance: an operator who expected three JARs and reads "2 landed" has
+    # their answer without reading the rows.
+    - name: Assert each pattern heads its own group with a landed count
+      ansible.builtin.assert:
+        that:
+          - files_report_lines | select('search', '^  pattern ')
+            | list | length == 2
+          - >-
+            '  pattern /mnt/c/estate/jars/*.jar -- 2 landed'
+            in files_report_lines
+          - >-
+            '  pattern /mnt/c/estate/conf/v*/site.ini -- 1 landed'
+            in files_report_lines
+        fail_msg: "pattern grouping did not render: {{ files_report_lines }}"
+
+    # The reason the accumulator holds one entry per FILE rather than one
+    # per declared entry: two files matched by one pattern can have
+    # different outcomes, and a report that stated the status per entry
+    # would have to pick one of them and be wrong about the other.
+    - name: Assert two files under one pattern render their own statuses
+      ansible.builtin.assert:
+        that:
+          - >-
+            '    copied    /opt/app/lib/alpha.jar  root:root 0644'
+            in files_report_lines
+          - >-
+            '    unchanged /opt/app/lib/beta.jar  root:root 0644'
+            in files_report_lines
+        fail_msg: >-
+          matched files did not render their own statuses:
+          {{ files_report_lines }}
+
+    # The headline claim of the whole report. This target carries 'v1/',
+    # which appears nowhere in the pattern that produced it - so it is a
+    # path an operator can obtain only from the run.
+    - name: Assert a matched file renders the VM path its pattern cannot state
+      ansible.builtin.assert:
+        that:
+          - >-
+            '    copied    /etc/app/conf/v1/site.ini  root:root 0644'
+            in files_report_lines
+        fail_msg: >-
+          a preserved sub-tree target did not render:
+          {{ files_report_lines }}
+
+    # A rendering bug that leaves stray blank lines (the trim_blocks /
+    # lstrip_blocks trap the template guards against) would show up here.
+    - name: Assert no blank or leading-whitespace-only lines were emitted
+      ansible.builtin.assert:
+        that:
+          - files_report_lines | select('match', '^\\s*$') | list | length == 0
+        fail_msg: "the report emitted blank lines: {{ files_report_lines }}"
+
+    # The report a VM whose config declares no files gets, which is the
+    # common case until an estate starts using the schema. It has to read
+    # as "nothing was asked for" rather than as an empty heading an
+    # operator mistakes for a lost entry.
+    #
+    # Last, because re-rendering replaces files_report_lines - every
+    # assertion above reads the seeded entry set's rendering.
+    - name: Re-render the report with no entries at all
+      ansible.builtin.include_role:
+        name: files_report
+      vars:
+        files_report_entries: []
+
+    - name: Assert an empty report says nothing was declared
+      ansible.builtin.assert:
+        that:
+          - files_report_lines | length == 2
+          - >-
+            files_report_lines[0]
+            == 'Files report for instance -- 0 copied, 0 unchanged'
+          - >-
+            files_report_lines[1]
+            == '  (no file entries were declared - nothing was copied here)'
+        fail_msg: "the empty report did not render: {{ files_report_lines }}"

@@ -1,0 +1,21 @@
+---
+# Render the accumulated files report for this host.
+#
+# Structure mirrors toolchain_report and artifact_report exactly: this role
+# owns the entry contract (defaults/main.yml) and the layout
+# (templates/files-report.j2), and report_render owns the shared mechanics
+# of turning rendered text into readable operator output and an assertable
+# fact. Third consumer of that tail rather than a third copy of it.
+#
+# The template lookup happens HERE, in this role's own var scope, so it
+# resolves against this role's templates/ with no search-path ambiguity -
+# see toolchain_report/tasks/main.yml for the full rationale.
+
+- name: Render and print the files report
+  ansible.builtin.include_role:
+    name: report_render
+  vars:
+    report_render_text: >-
+      {{ lookup('ansible.builtin.template', 'files-report.j2') }}
+    report_render_fact: files_report_lines
+    report_render_label: files transported to this host

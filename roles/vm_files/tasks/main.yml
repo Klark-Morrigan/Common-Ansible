@@ -21,6 +21,11 @@
 # already a pair, a bulk one expands to as many as its glob matches - so
 # keeping resolution and transport apart is what stops the ownership
 # policy from being stated (and drifting) once per form.
+#
+# Transport done, what it did is recorded in the play-wide files report
+# accumulator for the files_report role to render. Recording is its own
+# step for the same reason: what lands and what the operator is told about
+# it are different concerns.
 
 - name: Assert the declared file entries are a list
   ansible.builtin.assert:
@@ -74,3 +79,6 @@
 
 - name: Copy every resolved file onto the VM
   ansible.builtin.include_tasks: _copy-resolved-files.yml
+
+- name: Record what the transport did in the files report
+  ansible.builtin.include_tasks: _record-report.yml

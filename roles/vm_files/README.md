@@ -17,6 +17,7 @@ it.
 - [What is deliberately not validated](#what-is-deliberately-not-validated)
 - [Bulk resolution](#bulk-resolution)
 - [Transport](#transport)
+- [What it reports](#what-it-reports)
 - [Consuming this role](#consuming-this-role)
 - [Tests](#tests)
 
@@ -71,6 +72,7 @@ there too - the two forms evolve independently:
 | [`tasks/_assert-bulk-entry.yml`](tasks/_assert-bulk-entry.yml) | Bulk-form rules |
 | [`tasks/_resolve-bulk-entry.yml`](tasks/_resolve-bulk-entry.yml) | Expanding one glob into source/target pairs |
 | [`tasks/_copy-resolved-files.yml`](tasks/_copy-resolved-files.yml) | The transport, shared by both forms |
+| [`tasks/_record-report.yml`](tasks/_record-report.yml) | Projecting what the transport did into the files report |
 
 The allow-lists the unknown-sub-field rules read live in
 [`vars/main.yml`](vars/main.yml), not `defaults/`, precisely so a consumer
@@ -159,6 +161,14 @@ decide what the VM ends up with. User-owned content is out of scope: it
 belongs to the users layer, which runs once the users it would be owned
 by actually exist.
 
+Both policies are named in [`vars/main.yml`](vars/main.yml) rather than
+written on the tasks, because [the report](#what-it-reports) quotes them:
+an operator reading `root:root 0644` off the report is reading the same
+values the transport applied, so the report cannot claim a policy the role
+does not enforce. They live in `vars/` for the same reason the schema lists
+do - the policy is an invariant consumers rely on, so a caller must not be
+able to relax it for one host.
+
 A missing parent directory is created, including intermediate levels. It
 is created only where one is genuinely **absent** - the role stats first
 rather than declaring the directory outright, because a
@@ -167,6 +177,30 @@ directory that already exists, and an entry targeting (say) a home
 directory would then silently chown it to root. Creating what is missing
 and touching nothing else keeps the role's writes confined to the files
 it was asked to copy.
+
+## What it reports
+
+The role appends one entry to the play-wide `files_report_entries`
+accumulator per **file that landed** - not per declared entry, because a
+bulk entry's whole point is that one line of config becomes an unknown
+number of files. [`files_report`](../files_report/README.md) renders that
+accumulator once per host, and owns the entry contract.
+
+Each entry carries the file's source, the VM path it landed on, the
+ownership the transport applied, whether this run wrote it
+(`copied`/`unchanged`), and - for a matched file - the pattern that named
+it. Two of those are only knowable here:
+
+- **`copied` vs `unchanged`** comes from the `copy` result's `changed`
+  flag. That is the one moment the two cases are distinguishable; a scan of
+  the finished VM sees the file either way.
+- **Which files a glob expanded to, and what each was named** is visible
+  only in the run. A target carrying `v1/` where the pattern carried `v*`
+  appears nowhere in the config, and the PowerShell engine never printed
+  it.
+
+Recording is its own task file rather than part of the transport because it
+is a different concern: what lands, and what an operator is told about it.
 
 ## Consuming this role
 
@@ -185,6 +219,9 @@ it was asked to copy.
 With no `vm_files_entries` the role is a no-op, so a play can always
 include it and let config decide whether there is anything to copy.
 
+Close the play with [`files_report`](../files_report/README.md) to print
+what was transported.
+
 ## Tests
 
 `Tests/molecule/vm_files/default` covers the single form transport. Its
@@ -197,7 +234,13 @@ policy is applied rather than merely inherited. One entry per case:
 | Parents must be created | Both created levels are `root:root 0755` |
 | Parent already exists | The directory - deliberately neither root-owned nor `0755` - is left exactly as it was found |
 | Target already exists, drifted | Wrong content, owner and mode are all reconciled, so the transport is not merely a create |
-| No entries declared | The no-op promise above holds, rather than tripping over an empty loop's register |
+| No entries declared | The no-op promise above holds, rather than tripping over an empty loop's register, and contributes nothing to the report |
+
+Its converge also asserts the report accumulator: one entry per copied
+file, each carrying the target and source it was declared with, the
+single-form origin, and the ownership the verifier independently reads back
+off the VM - so the two together prove the report describes what actually
+landed.
 
 `molecule idempotence` covers the re-run.
 
@@ -227,6 +270,21 @@ file. The paths a pattern must **not** have selected are asserted absent
 too, since a resolver that matched too generously satisfies every
 presence assertion ever written. `molecule idempotence` covers the
 re-run, which for this scenario also means the expansion is stable.
+
+Its converge asserts the report accounts for every resolved file - one
+entry per matched file with its VM path, every declared glob represented,
+and the single-form entry keeping its own origin - and then renders the
+report from that accumulator. Rendering it here is what makes the producer
+and the template meet on real data:
+[`Tests/molecule/files_report`](../files_report/README.md#tests) seeds its
+entries by hand, so a field this role stopped emitting would pass there and
+surface only in front of an operator.
+
+Both accumulator assertions treat `copied`/`unchanged` as a domain rather
+than pinning a value, because `molecule idempotence` re-runs the same
+converge against an already-converged VM. The values themselves are pinned
+in the `files_report` scenario, whose entries are seeded rather than
+produced.
 
 The refusals reuse the schema scenario's helper: whether an entry is
 rejected by a shape rule or by a pattern that resolves to nothing, the

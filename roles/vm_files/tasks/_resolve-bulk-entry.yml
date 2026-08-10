@@ -140,6 +140,13 @@
 # without it every match flattens onto its basename. The trailing
 # separator a targetDir may carry is stripped so the join below cannot
 # produce a doubled one.
+#
+# Each pair keeps the pattern that produced it. The transport ignores it -
+# a pair is a pair - but the report groups the matched files under their
+# pattern, which is the only thing that tells an operator staring at forty
+# JAR paths which line of config put them there. Its PRESENCE is also what
+# marks the pair as bulk-resolved, reusing the discriminator the entry
+# forms themselves already use rather than adding a second one.
 - name: Pair every matched file with the path it lands on
   vars:
     vm_files_bulk_target_dir: >-
@@ -148,6 +155,7 @@
     vm_files_bulk_pairs: >-
       {{ vm_files_bulk_pairs + [{
            'source': item,
+           'pattern': vm_files_bulk_entry.pattern,
            'target': vm_files_bulk_target_dir ~ '/' ~ (
              (vm_files_bulk_entry.preserveRelativePath | default(false))
              | ternary(item | regex_replace(vm_files_bulk_anchor_re, ''),

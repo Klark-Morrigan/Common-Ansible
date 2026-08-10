@@ -8,12 +8,18 @@
 # below cannot drift between the forms.
 #
 # Caller contract (set by main.yml):
-#   vm_files_resolved  list of {source, target} mappings. source is a
+#   vm_files_resolved  list of {source, target} mappings, each optionally
+#                      carrying the `pattern` that produced it. source is a
 #                      controller-side path, target an absolute VM path.
+#
+# Produced for the caller:
+#   vm_files_copied    the copy loop's results, which _record-report.yml
+#                      projects into the files report.
 #
 # Files land root:root 0644 and created directories root:root 0755, both
 # stated here rather than inherited from whatever the source happens to
-# carry on the controller. See the role README (Transport) for the full
+# carry on the controller. The values come from vars/main.yml because the
+# report quotes the same ones; see the role README (Transport) for the full
 # rationale.
 
 # The parent directory is created only where one is genuinely absent,
@@ -39,9 +45,9 @@
   ansible.builtin.file:
     path: "{{ item.item.target | dirname }}"
     state: directory
-    owner: root
-    group: root
-    mode: "0755"
+    owner: "{{ vm_files_dir_owner }}"
+    group: "{{ vm_files_dir_group }}"
+    mode: "{{ vm_files_dir_mode }}"
   become: true
   loop: >-
     {{ vm_files_target_dir_stat.results | rejectattr('stat.exists') | list }}
@@ -52,10 +58,11 @@
   ansible.builtin.copy:
     src: "{{ item.source }}"
     dest: "{{ item.target }}"
-    owner: root
-    group: root
-    mode: "0644"
+    owner: "{{ vm_files_file_owner }}"
+    group: "{{ vm_files_file_group }}"
+    mode: "{{ vm_files_file_mode }}"
   become: true
   loop: "{{ vm_files_resolved }}"
   loop_control:
     label: "{{ item.target }}"
+  register: vm_files_copied

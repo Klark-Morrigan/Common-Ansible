@@ -1,0 +1,118 @@
+---
+# Molecule scenario for the files_report role - render a representative
+# entry set and assert the resulting text.
+#
+# The entry set is seeded through inventory host_vars rather than in
+# converge.yml on purpose: molecule's ansible verifier runs a SEPARATE
+# ansible-playbook invocation, so facts set during converge are gone by
+# verify time. An inventory var is visible to both plays, which lets
+# verify.yml re-render from the same single source and assert on it.
+#
+# It covers, in one host: both origins, both statuses, both statuses
+# WITHIN one pattern group (so the status column is per file rather than
+# per entry), two patterns (so the grouping is grouping and not one block
+# with a heading), and a preserved sub-tree whose targets carry a
+# directory the pattern's own text does not.
+#
+# What the accumulator looks like when vm_files really produces it is
+# asserted in the vm_files scenarios' converges instead - see those. This
+# scenario is about the rendering, which is why it seeds entries directly
+# rather than copying files to generate them.
+#
+# Single Ubuntu 24.04 container, Docker driver, ansible verifier. The role
+# only templates and sets a fact - it touches nothing on the target - but
+# the scenario still runs against the shared base image so it matches every
+# other scenario in the repo rather than introducing a delegated-driver
+# special case.
+#
+# Image: reuses the toolchain_host_push base (python3 + sudo on
+# ubuntu:24.04). No custom Dockerfile - build it via the command in
+# Tests/molecule/toolchain_host_push/Dockerfile.
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: instance
+    image: common-ansible/toolchain-host-push-base:24.04
+    pre_build_image: true
+    command: /bin/sleep infinity
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  env:
+    # ANSIBLE_ROLES_PATH (env) wins over ansible.cfg's roles_path and
+    # propagates across every molecule phase. MOLECULE_PROJECT_DIRECTORY
+    # is the scenario dir; three levels up is the repo root, then roles/.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../../roles"
+  config_options:
+    defaults:
+      stdout_callback: yaml
+      callbacks_enabled: profile_tasks
+  inventory:
+    host_vars:
+      instance:
+        ansible_user: root
+        files_report_entries:
+          # Single form, written this run.
+          - source: /mnt/c/estate/app.conf
+            target: /etc/app/app.conf
+            owner: root
+            group: root
+            mode: "0644"
+            status: copied
+            origin: single
+            pattern: ""
+          # Single form, already current. Pairs with the one above so the
+          # status column is proven to vary within a section.
+          - source: /mnt/c/estate/logging.json
+            target: /etc/app/logging.json
+            owner: root
+            group: root
+            mode: "0644"
+            status: unchanged
+            origin: single
+            pattern: ""
+          # First pattern group, flattened. Two files with DIFFERENT
+          # statuses under one pattern - the case that proves status is
+          # rendered per file and not per declared entry, which is the
+          # whole reason the accumulator is one entry per file.
+          - source: /mnt/c/estate/jars/alpha.jar
+            target: /opt/app/lib/alpha.jar
+            owner: root
+            group: root
+            mode: "0644"
+            status: copied
+            origin: bulk
+            pattern: /mnt/c/estate/jars/*.jar
+          - source: /mnt/c/estate/jars/beta.jar
+            target: /opt/app/lib/beta.jar
+            owner: root
+            group: root
+            mode: "0644"
+            status: unchanged
+            origin: bulk
+            pattern: /mnt/c/estate/jars/*.jar
+          # Second pattern group, and a preserved sub-tree: the target
+          # carries 'v1/' where the pattern text carries 'v*'. An operator
+          # cannot derive this path from the config, which is exactly why
+          # the report prints it.
+          - source: /mnt/c/estate/conf/v1/site.ini
+            target: /etc/app/conf/v1/site.ini
+            owner: root
+            group: root
+            mode: "0644"
+            status: copied
+            origin: bulk
+            pattern: /mnt/c/estate/conf/v*/site.ini
+
+verifier:
+  name: ansible
