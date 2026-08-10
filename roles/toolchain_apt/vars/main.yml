@@ -1,0 +1,31 @@
+---
+# Internal vars for the toolchain_apt role. Not part of the input
+# contract - defaults/main.yml owns that. These live in vars/ (not
+# defaults/) precisely so a caller cannot override them: they are
+# implementation detail, not configuration.
+
+# The installed-version probe, run once before the install and once after.
+# Factored here because both call sites need the command byte-for-byte
+# identical - the whole point is comparing the same query across the
+# install - and a copy-pasted second version could drift silently.
+#
+# Both readings are needed and neither substitutes for the other:
+#   before  the only moment per-package status is knowable. apt installs
+#           the whole set in one transaction and reports a single
+#           `changed` for it, which cannot say WHICH packages moved.
+#   after   the authoritative installed version. For an unpinned entry it
+#           is the only way to name a version at all; for a pinned one it
+#           proves the pin took.
+#
+# shell, not command: `|| true` absorbs dpkg-query's non-zero exit on a
+# package name it has never heard of (a fresh VM), so an absent package
+# reports as absent rather than failing the play. pipefail + bash satisfy
+# ansible-lint's risky-shell-pipe rule, which flags the `|` in the Jinja
+# filter chain even though the shell body itself pipes nothing.
+#
+# No become: the dpkg status database is world-readable.
+toolchain_apt_version_probe_cmd: |
+  set -euo pipefail
+  dpkg-query -W -f='${binary:Package} ${Version}\n' \
+    {{ toolchain_apt_packages | map(attribute='name') | map('quote')
+       | join(' ') }} 2>/dev/null || true

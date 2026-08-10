@@ -110,6 +110,10 @@
     state: present
     update_cache: false
   become: true
+  # Registered for the toolchain report at the end of this file: this task's
+  # changed flag is what distinguishes "this run installed the engine" from
+  # "the engine was already here".
+  register: docker_engine_install
 
 # ---------------------------------------------------------------------
 # Service: enable and start the daemon
@@ -154,3 +158,37 @@
   loop: "{{ docker_group_members }}"
   loop_control:
     label: "{{ item }}"
+
+# ---------------------------------------------------------------------
+# Report: contribute this daemon to the per-host toolchain report
+# ---------------------------------------------------------------------
+
+# The engine version as dpkg holds it. Read from the package database
+# rather than `docker --version` so the report still names a version when
+# the daemon is installed but not yet answering. Reads only - never
+# changed; the trailing `|| true` covers the (unreachable in practice) case
+# where the install above left no package to query.
+- name: Read the installed Docker engine version
+  ansible.builtin.shell:
+    cmd: dpkg-query -W -f='${Version}' docker-ce 2>/dev/null || true
+  register: docker_engine_version
+  changed_when: false
+
+# One entry for the whole daemon: unlike the versioned toolchains this is a
+# presence gate, not a set to reconcile. No paths are reported - dpkg owns
+# the engine's filesystem footprint, and the report renders such an entry
+# as dpkg-managed rather than as an empty block.
+- name: Append the Docker engine to the toolchain report
+  ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix]
+    toolchain_report_entries: >-
+      {{ (toolchain_report_entries | default([])) + [entry] }}
+  vars:
+    entry:
+      tool: docker
+      version: "{{ docker_engine_version.stdout | trim }}"
+      section: base-image
+      status: >-
+        {{ 'installed' if docker_engine_install.changed else 'present' }}
+      install_dir: ""
+      symlinks: []
+      files: []

@@ -1,0 +1,55 @@
+{#
+  Render artifact_report_entries for one host as plain text lines.
+
+  Layout mechanics (column-0 block tags, plain ASCII, why not colour) are
+  the same as the toolchain report's template - see
+  roles/toolchain_report/templates/toolchain-report.j2 for the rationale.
+
+  MISSING is uppercase on purpose. It is the one line an operator
+  diagnosing a broken build is scanning for, and it must survive being
+  read in a wall of paths.
+#}
+{% set entries = artifact_report_entries | default([]) %}
+{% set sections = [
+     ('host-push',
+      'section 1 - host-pushed (fetched from the controller file server)'),
+     ('vm-download',
+      'section 2 - vm-downloaded (the VM fetches these itself)')
+   ] %}
+{% set downloaded = entries | selectattr('transfer', 'equalto', 'downloaded') | list %}
+{% set reused = entries | selectattr('transfer', 'equalto', 'reused-cache') | list %}
+{% set untouched = entries | selectattr('transfer', 'equalto', 'none') | list %}
+{% set gone = entries | rejectattr('unpacked.present') | list %}
+{% set lost = entries | selectattr('artifact.path') | rejectattr('artifact.present') | list %}
+Artifact report for {{ inventory_hostname }} -- {{ downloaded | length }} downloaded, {{ reused | length }} reused from cache, {{ untouched | length }} not needed{% if gone or lost %}; {{ (gone | length) + (lost | length) }} MISSING{% endif %}
+
+{% if not entries %}
+  (no toolchain role contributed an artifact - nothing was fetched here)
+{% endif %}
+{% for key, heading in sections %}
+{% set rows = entries | selectattr('section', 'equalto', key) | list %}
+{% if rows %}
+{{ heading }}
+{% for entry in rows %}
+  {{ entry.tool }} {{ entry.version }}  [transfer: {{ entry.transfer }}]
+      source    {{ entry.source }}
+{% if entry.artifact.path %}
+      artifact  {{ entry.artifact.path }}
+{% if entry.artifact.present %}
+                present, {{ entry.artifact.size | default(0) | filesizeformat }}{% if entry.artifact.mtime | default(0) | int > 0 %}, modified {{ '%Y-%m-%d %H:%M' | strftime(entry.artifact.mtime | int) }}{% endif %}
+
+{% else %}
+                MISSING
+{% endif %}
+{% else %}
+      artifact  not retained{% if entry.artifact.note | default('') %} - {{ entry.artifact.note }}{% endif %}
+
+{% endif %}
+{% if entry.unpacked.present %}
+      unpacked  {{ entry.unpacked.dir }}  present
+{% else %}
+      unpacked  {{ entry.unpacked.dir }}  MISSING
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}

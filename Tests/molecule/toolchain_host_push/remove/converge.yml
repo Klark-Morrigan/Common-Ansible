@@ -15,3 +15,26 @@
     - name: Include the role under test
       ansible.builtin.include_role:
         name: toolchain_host_push
+
+    # The empty desired set is the edge both accumulators have to survive
+    # without a guard: every loop in the recording files iterates a list
+    # that is now empty, and the artifact stats iterate the desired set
+    # rather than the installed one. The toolchain report must still
+    # account for the removal; the artifact report must be empty, since
+    # its scope is what SHOULD be on the box and the answer is nothing.
+    #
+    # Guarded on the diff because molecule re-runs this play for
+    # idempotence, where nothing is stale and the toolchain report is
+    # empty too.
+    - name: Assert the removal is reported and no artifact is claimed
+      ansible.builtin.assert:
+        that:
+          - toolchain_report_entries | length == 1
+          - (toolchain_report_entries | first).status == 'removed'
+          - (toolchain_report_entries | first).version == '1.0.0'
+          - artifact_report_entries | default([]) | length == 0
+        fail_msg: >-
+          empty-desired-set reporting was wrong - toolchain:
+          {{ toolchain_report_entries }} artifact:
+          {{ artifact_report_entries | default([]) }}
+      when: toolchain_host_push_stale | length > 0

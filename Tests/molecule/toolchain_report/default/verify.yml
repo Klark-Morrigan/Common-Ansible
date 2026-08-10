@@ -1,0 +1,103 @@
+---
+# Verify the rendered report.
+#
+# The verifier is a separate ansible-playbook run, so converge's facts are
+# gone - this play re-includes the role to re-render from the same
+# inventory-seeded entry set, then asserts on toolchain_report_lines. That
+# fact is the role's own output, so the assertions below check exactly the
+# text the operator sees rather than scraping the callback's stdout.
+
+- name: Verify - the toolchain report renders every entry and its paths
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Re-render the report
+      ansible.builtin.include_role:
+        name: toolchain_report
+
+    # The header is the one-glance answer: how much of this run was real
+    # work. Counts must reflect the seeded statuses (1 installed, 3
+    # present, 1 removed), not the entry total.
+    - name: Assert the header counts each status
+      ansible.builtin.assert:
+        that:
+          - toolchain_report_lines[0] is search('Toolchain report for instance')
+          - toolchain_report_lines[0] is search('1 installed')
+          - toolchain_report_lines[0] is search('3 present')
+          - toolchain_report_lines[0] is search('1 removed')
+        fail_msg: >-
+          header line did not summarise the seeded statuses:
+          {{ toolchain_report_lines[0] | default('<no lines>') }}
+
+    # Every section that has entries must be announced, so the report reads
+    # in the same three-section taxonomy the roles are organised by.
+    - name: Assert all three section headings are present
+      ansible.builtin.assert:
+        that:
+          - toolchain_report_lines | select('search', '^section 1 - host-pushed')
+            | list | length == 1
+          - toolchain_report_lines | select('search', '^section 2 - vm-downloaded')
+            | list | length == 1
+          - toolchain_report_lines | select('search', '^section 3 - base-image')
+            | list | length == 1
+        fail_msg: "section headings missing or duplicated: {{ toolchain_report_lines }}"
+
+    # Status, tool and version on one line, column-aligned.
+    - name: Assert each entry renders its status, tool and version
+      ansible.builtin.assert:
+        that:
+          - "'  present   faketool 1.0.0' in toolchain_report_lines"
+          - "'  installed fakesdk 9.9.900' in toolchain_report_lines"
+          - "'  removed   fakesdk 8.0.100' in toolchain_report_lines"
+          - "'  present   fakepkg 0.9.0-1' in toolchain_report_lines"
+          - "'  present   docker 5:27.3.1-1~ubuntu.24.04~noble' in toolchain_report_lines"
+        fail_msg: "an entry headline did not render: {{ toolchain_report_lines }}"
+
+    # The whole point of the report: the paths, in full. Every symlink is
+    # listed individually rather than counted, so a second link on the same
+    # tool must appear on its own line.
+    - name: Assert the install dir, every symlink, and every owned file render
+      ansible.builtin.assert:
+        that:
+          - "'      dir   /opt/faketool-1.0.0' in toolchain_report_lines"
+          - >-
+            '      link  /usr/local/bin/faketool -> /opt/faketool-1.0.0/bin/faketool'
+            in toolchain_report_lines
+          - >-
+            '      link  /usr/local/bin/faketool-cli -> /opt/faketool-1.0.0/bin/faketool-cli'
+            in toolchain_report_lines
+          - "'      file  /etc/profile.d/faketool.sh' in toolchain_report_lines"
+          - "'      dir   /opt/fakesdk-9.9.900' in toolchain_report_lines"
+          - "'      file  /etc/fakesdk/install_location' in toolchain_report_lines"
+        fail_msg: "a path line did not render: {{ toolchain_report_lines }}"
+
+    # A removed entry keeps its paths, so the operator can see what left.
+    - name: Assert the removed entry still reports what it owned
+      ansible.builtin.assert:
+        that:
+          - "'      dir   /opt/fakesdk-8.0.100' in toolchain_report_lines"
+          - >-
+            '      link  /usr/local/bin/fakesdk -> /opt/fakesdk-8.0.100/fakesdk'
+            in toolchain_report_lines
+        fail_msg: "the removed entry lost its path record: {{ toolchain_report_lines }}"
+
+    # An entry with no tracked paths must say WHY, not render as a blank
+    # block - "we do not track these" reads differently from "this placed
+    # nothing". Both dpkg-managed entries (apt package, docker engine) get
+    # the line, and nothing else does.
+    - name: Assert dpkg-managed entries explain their missing paths
+      ansible.builtin.assert:
+        that:
+          - toolchain_report_lines
+            | select('search', 'dpkg-managed') | list | length == 2
+        fail_msg: >-
+          expected exactly two dpkg-managed notes:
+          {{ toolchain_report_lines }}
+
+    # A rendering bug that leaves stray blank lines (the trim_blocks /
+    # lstrip_blocks trap the template guards against) would show up here.
+    - name: Assert no blank or leading-whitespace-only lines were emitted
+      ansible.builtin.assert:
+        that:
+          - toolchain_report_lines | select('match', '^\\s*$') | list | length == 0
+        fail_msg: "the report emitted blank lines: {{ toolchain_report_lines }}"

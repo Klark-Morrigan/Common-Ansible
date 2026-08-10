@@ -19,3 +19,55 @@
     - name: Include the role under test
       ansible.builtin.include_role:
         name: dotnet_tools
+
+    # Both accumulators are facts, so they cannot be asserted from
+    # verify.yml (a separate ansible-playbook run with no fact cache).
+    #
+    # Status/transfer are asserted as sets because molecule runs this play
+    # twice - install, then a no-op re-run. The manifest-derived paths must
+    # be identical on both passes, which is what pins down the re-read: on
+    # the install pass the entry is built from a manifest written moments
+    # earlier, on the second from the pre-reconcile read.
+    - name: Assert the role recorded the tool in the toolchain report
+      ansible.builtin.assert:
+        that:
+          - toolchain_report_entries | length == 1
+          - entry.tool == 'dotnet-reportgenerator-globaltool'
+          - entry.version == '5.4.4'
+          - entry.section == 'host-push'
+          - entry.status in ['installed', 'present']
+          - entry.install_dir ==
+            '/usr/local/share/dotnet/tools/.store/dotnet-reportgenerator-globaltool/5.4.4'
+          # The driver's shims are this tool's whole external footprint,
+          # and the manifest records each as {path, target}.
+          - entry.symlinks | length >= 1
+          - entry.symlinks[0].path is match('^/usr/local/bin/')
+          - entry.files == []
+        fail_msg: >-
+          toolchain_report_entries did not describe the tool install:
+          {{ toolchain_report_entries }}
+      vars:
+        entry: "{{ toolchain_report_entries | first }}"
+
+    # The artifact side. The .nupkg is staged then wiped, so the entry
+    # must carry an empty path WITH a note - an empty path and no note
+    # would read as "lost" rather than "by design".
+    - name: Assert the role recorded the tool in the artifact report
+      ansible.builtin.assert:
+        that:
+          - artifact_report_entries | length == 1
+          - entry.tool == 'dotnet-reportgenerator-globaltool'
+          - entry.section == 'host-push'
+          - entry.source ==
+            'http://127.0.0.1:18841/dotnet-tool-dotnet-reportgenerator-globaltool-5.4.4.nupkg'
+          - entry.transfer in ['downloaded', 'none']
+          - entry.artifact.path == ''
+          - entry.artifact.note | length > 0
+          - entry.unpacked.dir ==
+            '/usr/local/share/dotnet/tools/.store/dotnet-reportgenerator-globaltool/5.4.4'
+          - entry.unpacked.present
+        fail_msg: >-
+          artifact_report_entries did not describe the tool artifact:
+          {{ artifact_report_entries }}
+      vars:
+        entry: "{{ artifact_report_entries | first }}"

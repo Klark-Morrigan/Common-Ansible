@@ -58,6 +58,16 @@ Full field documentation lives in
 4. **Group** - ensures the `docker` group exists and adds each
    `docker_group_members` user to it with `append` (so the socket is
    reachable without sudo).
+5. **Report** - reads the installed engine version from the package
+   database and appends one entry to the per-host
+   [toolchain report](../toolchain_report/README.md). The version comes
+   from `dpkg-query` rather than `docker --version` so the report still
+   names a version when the daemon is installed but not yet answering,
+   and the status comes from the engine install task's `changed` flag.
+   No paths are reported - dpkg owns the engine's filesystem footprint,
+   and the report renders such an entry as dpkg-managed rather than as an
+   empty block. This role contributes nothing to the artifact report:
+   apt manages its own download cache, and this stack transfers nothing.
 
 ```mermaid
 flowchart TD
@@ -65,6 +75,7 @@ flowchart TD
   ENG --> SVC[enable + start service]
   SVC --> GRP[add runner user to docker group]
   GRP --> OK[docker ps as runner user]
+  ENG --> REP[report entry: engine version + status]
 ```
 
 ## Why an Ansible role, not base-image baking
@@ -129,6 +140,12 @@ and starts the engine - useful for a host where only root drives Docker.
 [`Tests/molecule/docker/`](../../Tests/molecule/docker/) has one scenario
 covering the plan's cases - engine installed, service active, a target user
 in the `docker` group, `docker ps` reachable, and an idempotent re-run.
+
+The report accumulator is a fact, so it cannot be asserted from
+`verify.yml` (a separate `ansible-playbook` run with no fact cache) -
+`converge.yml` asserts it instead: exactly one entry (this is a presence
+gate, not a set to reconcile), a non-empty version read from the package
+database, and no claimed paths.
 
 ### The docker-in-docker molecule caveat
 

@@ -1,0 +1,18 @@
+---
+# Render the accumulated toolchain report for this host.
+#
+# This role owns the entry contract (defaults/main.yml) and the layout
+# (templates/toolchain-report.j2); report_render owns the shared mechanics
+# of turning rendered text into readable operator output and an assertable
+# fact. The template lookup happens HERE, in this role's own var scope, so
+# it resolves against this role's templates/ with no search-path ambiguity
+# - report_render never needs to know a template name.
+
+- name: Render and print the toolchain report
+  ansible.builtin.include_role:
+    name: report_render
+  vars:
+    report_render_text: >-
+      {{ lookup('ansible.builtin.template', 'toolchain-report.j2') }}
+    report_render_fact: toolchain_report_lines
+    report_render_label: reconciled toolchains for this host

@@ -117,3 +117,15 @@
   loop_control:
     loop_var: dotnet_tools_target
     label: "{{ dotnet_tools_target.key }}"
+
+# 4. Record the outcome for the per-host toolchain report. Not part of the
+#    diff - it runs here because the diff sets are what make "installed"
+#    distinguishable from "was already there".
+- name: Record the tool outcomes in the toolchain report
+  ansible.builtin.include_tasks: _record-report.yml
+
+# 5. Probe and record the acquisition side for the artifact report: where
+#    each package came from and whether the store slot it was installed
+#    into is still there.
+- name: Record the tool artifacts in the artifact report
+  ansible.builtin.include_tasks: _record-artifacts.yml

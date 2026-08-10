@@ -39,6 +39,17 @@
   loop_control:
     label: "{{ item.name }}"
 
+# Snapshot what dpkg already has BEFORE the install, so the report can
+# tell "already at the pin" apart from "this run put it there". The probe
+# command - and why it is run twice - is documented in vars/main.yml.
+- name: Snapshot the installed version of each desired package
+  ansible.builtin.shell:
+    cmd: "{{ toolchain_apt_version_probe_cmd }}"
+    executable: /bin/bash
+  register: toolchain_apt_installed_before
+  changed_when: false
+  when: toolchain_apt_specifiers | default([]) | length > 0
+
 # Refresh the apt cache, throttled by cache_valid_time so a re-run inside
 # the window does not update (and so does not report changed) - this is
 # what keeps the role idempotent while still refreshing an empty cache on
@@ -66,3 +77,50 @@
     update_cache: false
   become: true
   when: toolchain_apt_specifiers | default([]) | length > 0
+
+# The same probe again, so the report quotes the version dpkg actually
+# holds rather than the pin the caller asked for.
+- name: Read back the installed version of each desired package
+  ansible.builtin.shell:
+    cmd: "{{ toolchain_apt_version_probe_cmd }}"
+    executable: /bin/bash
+  register: toolchain_apt_installed_after
+  changed_when: false
+  when: toolchain_apt_specifiers | default([]) | length > 0
+
+# Append one entry per package to the play-wide report accumulator the
+# toolchain_report role renders per host.
+#
+# No paths are reported: apt places files all over the filesystem and dpkg,
+# not this role, owns that record. The report renders such an entry as
+# dpkg-managed, which reads differently from "this placed nothing".
+- name: Append the apt packages to the toolchain report
+  ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix]
+    toolchain_report_entries: >-
+      {{ (toolchain_report_entries | default([])) + [entry] }}
+  loop: "{{ toolchain_apt_packages }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    before_lines: "{{ toolchain_apt_installed_before.stdout_lines | default([]) }}"
+    after_lines: "{{ toolchain_apt_installed_after.stdout_lines | default([]) }}"
+    # A pinned entry counts as already-present only at that exact version;
+    # an unpinned one is satisfied by any non-empty installed version.
+    want_pattern: >-
+      {{ '^' ~ (item.name | regex_escape) ~ ' '
+         ~ ((item.version | regex_escape)
+            if (item.version | default('') | length > 0) else '.+') ~ '$' }}
+    name_pattern: "{{ '^' ~ (item.name | regex_escape) ~ ' ' }}"
+    entry:
+      tool: "{{ item.name }}"
+      version: >-
+        {{ (after_lines | select('match', name_pattern) | list
+            | first | default('')).split(' ') | last | default('') }}
+      section: vm-download
+      status: >-
+        {{ 'present'
+           if (before_lines | select('match', want_pattern) | list | length > 0)
+           else 'installed' }}
+      install_dir: ""
+      symlinks: []
+      files: []

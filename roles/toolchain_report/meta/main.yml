@@ -1,0 +1,27 @@
+---
+# Role metadata. The galaxy_info block exists to satisfy ansible-lint's
+# role-name / meta-no-info rules, not to publish to Galaxy (this repo is
+# consumed via a sibling checkout - see the repo README).
+
+galaxy_info:
+  role_name: toolchain_report
+  author: Common-Ansible
+  description: >-
+    Render the accumulated per-host toolchain reconciliation report: what
+    each toolchain role installed, left alone, or removed, and the exact
+    paths it owns on the VM. Reads the toolchain_report_entries
+    accumulator; installs nothing itself.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+  galaxy_tags:
+    - system
+    - toolchain
+
+# Standalone: the role reads one accumulator var and renders it. It has no
+# meta dep on the roles that produce the entries - a play that includes it
+# without them simply reports an empty run, which is itself informative.
+dependencies: []

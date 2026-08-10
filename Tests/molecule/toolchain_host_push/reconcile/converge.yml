@@ -23,3 +23,56 @@
     - name: Include the role under test
       ansible.builtin.include_role:
         name: toolchain_host_push
+
+    # A swap is the only path that produces a "removed" report entry, and
+    # it is also the path where the naive approach breaks: 1.0.0's manifest
+    # is deleted before the report is built, so its paths can only come
+    # from the stale set captured during the diff.
+    #
+    # Guarded on the diff rather than asserted unconditionally because
+    # molecule re-runs this play for idempotence, where nothing is stale.
+    # The guard makes the assertion an invariant - "whatever was removed is
+    # reported, with the paths it owned" - true on both passes.
+    - name: Assert the swap recorded both versions in the toolchain report
+      ansible.builtin.assert:
+        that:
+          - removed | length == 1
+          - removed[0].version == '1.0.0'
+          - removed[0].install_dir == '/opt/faketool-1.0.0'
+          - removed[0].symlinks[0].target == '/opt/faketool-1.0.0/bin/faketool'
+          - installed | length == 1
+          - installed[0].version == '2.0.0'
+          - installed[0].install_dir == '/opt/faketool-2.0.0'
+        fail_msg: >-
+          the swap was not reported as removed 1.0.0 + installed 2.0.0:
+          {{ toolchain_report_entries }}
+      vars:
+        removed: >-
+          {{ toolchain_report_entries
+             | selectattr('status', 'equalto', 'removed') | list }}
+        installed: >-
+          {{ toolchain_report_entries
+             | selectattr('status', 'equalto', 'installed') | list }}
+      when: toolchain_host_push_stale | length > 0
+
+    # The artifact report's scope is the DESIRED set, so a swap leaves one
+    # entry - the incoming version - even though two versions were touched.
+    # The removed version is absent by design: uninstall leaves its cached
+    # tarball behind, but a manifest records no archive name, so an
+    # orphaned tarball cannot be attributed back to the tool that fetched
+    # it. The toolchain report above is what accounts for the removal.
+    - name: Assert the artifact report describes only the desired version
+      ansible.builtin.assert:
+        that:
+          - artifact_report_entries | length == 1
+          - entry.version == '2.0.0'
+          - entry.artifact.path ==
+            '/var/cache/common-ansible/toolchains/faketool-2.0.0.tar.gz'
+          - entry.artifact.present
+          - entry.unpacked.dir == '/opt/faketool-2.0.0'
+          - entry.unpacked.present
+        fail_msg: >-
+          artifact_report_entries did not describe the incoming version:
+          {{ artifact_report_entries }}
+      vars:
+        entry: "{{ artifact_report_entries | first }}"

@@ -1,0 +1,76 @@
+---
+# Append this role's outcome to the play-wide toolchain report accumulator
+# (toolchain_report_entries), rendered per host by the toolchain_report
+# role. The host-push counterpart of this file carries the full rationale;
+# the shape here differs only in the diff key.
+#
+# Tools are section 1 by acquisition: the .nupkg is staged on the
+# controller and pulled over the substrate file server exactly like a
+# tarball toolchain, so entries are tagged host-push and group with the
+# SDK that runs them.
+
+# Seed from main.yml's pre-reconcile read - already accurate for a run that
+# changed nothing, and the seed also clears any value a prior role
+# invocation left behind.
+- name: Seed the reported tool manifest set from the pre-reconcile read
+  ansible.builtin.set_fact:
+    dotnet_tools_reported: "{{ dotnet_tools_installed }}"
+
+- name: Re-read the tool manifests after a reconcile
+  when: >-
+    (dotnet_tools_missing | length > 0)
+    or (dotnet_tools_stale | length > 0)
+  block:
+    - name: Find the tool manifests after the reconcile
+      ansible.builtin.find:
+        paths: "{{ dotnet_tools_manifest_dir }}"
+        patterns: "dotnettool-*.json"
+        file_type: file
+      become: true
+      register: dotnet_tools_report_files
+
+    - name: Read each tool manifest the reconcile left in place
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      become: true
+      loop: >-
+        {{ dotnet_tools_report_files.files | map(attribute='path') | list }}
+      loop_control:
+        label: "{{ item }}"
+      register: dotnet_tools_report_slurp
+
+    - name: Record the post-reconcile tool manifest set
+      ansible.builtin.set_fact:
+        dotnet_tools_reported: >-
+          {{ dotnet_tools_report_slurp.results
+             | map(attribute='content')
+             | map('b64decode')
+             | map('from_json')
+             | list }}
+
+# Surviving and stale manifests are disjoint (uninstall deletes the stale
+# one first), so one loop classifies both by composite-key membership.
+- name: Append the .NET global tools to the toolchain report
+  ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix]
+    toolchain_report_entries: >-
+      {{ (toolchain_report_entries | default([])) + [entry] }}
+  loop: "{{ dotnet_tools_reported + dotnet_tools_stale }}"
+  loop_control:
+    label: "{{ item.key | default(item.id) }}"
+  vars:
+    stale_keys: "{{ dotnet_tools_stale | map(attribute='key') | list }}"
+    missing_keys: "{{ dotnet_tools_missing | map(attribute='key') | list }}"
+    entry:
+      tool: "{{ item.id }}"
+      version: "{{ item.version }}"
+      section: host-push
+      status: >-
+        {{ 'removed' if item.key in stale_keys
+           else ('installed' if item.key in missing_keys
+                 else 'present') }}
+      install_dir: "{{ item.install_dir | default('') }}"
+      # The driver's shims ARE this tool's whole external footprint, and
+      # the manifest already records each as {path, target} - so there is
+      # nothing to add under `files`.
+      symlinks: "{{ item.symlinks | default([]) }}"
+      files: []

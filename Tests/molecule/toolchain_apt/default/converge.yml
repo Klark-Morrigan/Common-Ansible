@@ -18,3 +18,49 @@
     - name: Include the role under test
       ansible.builtin.include_role:
         name: toolchain_apt
+
+    # The report accumulator is a fact, so it cannot be asserted from
+    # verify.yml (a separate ansible-playbook run with no fact cache).
+    #
+    # This is the only coverage of the role's status logic, which is the
+    # most intricate part of it: the before-snapshot is matched against a
+    # regex built per entry from the package name and - when pinned - the
+    # exact version, so a broken pattern would silently report every
+    # package as `installed` forever. Molecule runs this play twice, and
+    # the two passes exercise BOTH branches: the first finds shellcheck
+    # absent (installed), the second finds it at the exact pin (present).
+    # Asserting the set is what keeps the assertion true on both, while
+    # the version - read from the after-snapshot - must be exact on each.
+    - name: Assert the role recorded shellcheck in the toolchain report
+      ansible.builtin.assert:
+        that:
+          - toolchain_report_entries | length == 1
+          - entry.tool == 'shellcheck'
+          - entry.version == '0.9.0-1'
+          - entry.section == 'vm-download'
+          - entry.status in ['installed', 'present']
+          # apt places files all over the filesystem and dpkg owns that
+          # record, so an apt entry deliberately claims no paths.
+          - entry.install_dir == ''
+          - entry.symlinks == []
+          - entry.files == []
+        fail_msg: >-
+          toolchain_report_entries did not describe the apt install:
+          {{ toolchain_report_entries }}
+      vars:
+        entry: "{{ toolchain_report_entries | first }}"
+
+    # The pinned-entry branch of the status regex, pinned down precisely:
+    # after the install the package IS at the pin, so a second pass must
+    # read `present`. A pattern that failed to match would report
+    # `installed` here and this would fail on the idempotence run.
+    - name: Assert an already-pinned package reports present on re-run
+      ansible.builtin.assert:
+        that:
+          - (toolchain_report_entries | first).status == 'present'
+        fail_msg: >-
+          re-running against an already-pinned package did not report
+          present: {{ toolchain_report_entries }}
+      when: >-
+        toolchain_apt_installed_before.stdout_lines | default([])
+        | select('search', '^shellcheck 0\\.9\\.0-1$') | list | length > 0
