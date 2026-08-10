@@ -36,9 +36,23 @@
 
     - name: Create the pre-existing target directory on the VM
       ansible.builtin.file:
-        path: "{{ preexisting_dir }}"
+        path: "{{ preexisting_dir.path }}"
         state: directory
-        owner: "{{ preexisting_dir_owner }}"
-        group: "{{ preexisting_dir_group }}"
-        mode: "{{ preexisting_dir_mode }}"
+        owner: "{{ preexisting_dir.owner }}"
+        group: "{{ preexisting_dir.group }}"
+        mode: "{{ preexisting_dir.mode }}"
+      become: true
+
+    # Drift, planted deliberately: wrong content, wrong owner, wrong mode.
+    # A run that only wrote files that were absent would satisfy every
+    # other case in this scenario, so something has to prove the transport
+    # RECONCILES a target rather than merely creating one - which is what
+    # an operator re-running provisioning after a hand-edit depends on.
+    - name: Plant a drifted copy of one target on the VM
+      ansible.builtin.copy:
+        dest: "{{ drifted_target }}"
+        content: "stale bytes the run has to replace"
+        owner: nobody
+        group: nogroup
+        mode: "0600"
       become: true

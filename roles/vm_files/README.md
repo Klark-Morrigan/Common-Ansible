@@ -143,11 +143,16 @@ include it and let config decide whether there is anything to copy.
 `Tests/molecule/vm_files/default` covers the single form transport. Its
 fixtures are staged on the controller mode `0600` and owned by whoever
 runs the scenario, so the verifier's `root:root 0644` assertions prove the
-policy is applied rather than merely inherited. Two entries cover the two
-parent-directory cases - one whose parents must be created, one writing
-into a directory that already exists - and that second directory is
-deliberately neither root-owned nor `0755`, so "the role left it alone" is
-an observable claim. `molecule idempotence` covers the re-run.
+policy is applied rather than merely inherited. One entry per case:
+
+| Case | What it pins down |
+| --- | --- |
+| Parents must be created | Both created levels are `root:root 0755` |
+| Parent already exists | The directory - deliberately neither root-owned nor `0755` - is left exactly as it was found |
+| Target already exists, drifted | Wrong content, owner and mode are all reconciled, so the transport is not merely a create |
+| No entries declared | The no-op promise above holds, rather than tripping over an empty loop's register |
+
+`molecule idempotence` covers the re-run.
 
 `Tests/molecule/vm_files/schema` covers the contract from both sides. Its
 `converge.yml` is the positive control - a well-formed entry set using

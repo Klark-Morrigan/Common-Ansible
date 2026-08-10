@@ -11,13 +11,10 @@
 #   vm_files_resolved  list of {source, target} mappings. source is a
 #                      controller-side path, target an absolute VM path.
 #
-# Ownership policy: root:root, 0644, stated on the copy rather than
-# inherited from the source. Whatever attributes a file carries on the
-# controller are an accident of how it got there - a checkout, a download,
-# a Windows volume with no POSIX modes at all - and none of that should
-# decide what the VM ends up with. Everything therefore lands root-owned
-# and world-readable; user-owned content belongs to the users layer, which
-# runs once the users it would be owned by actually exist.
+# Files land root:root 0644 and created directories root:root 0755, both
+# stated here rather than inherited from whatever the source happens to
+# carry on the controller. See the role README (Transport) for the full
+# rationale.
 
 # The parent directory is created only where one is genuinely absent,
 # which is why this stats first instead of simply declaring the directory.

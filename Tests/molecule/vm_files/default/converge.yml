@@ -16,3 +16,15 @@
         name: vm_files
       vars:
         vm_files_entries: "{{ fixture_entries }}"
+
+    # The role's standing promise is that a play can include it
+    # unconditionally and let config decide whether there is anything to
+    # copy. That is a claim about the empty list specifically - every loop
+    # in the transport runs zero times and the register they chain through
+    # is never populated by a task that ran - so it is exercised here
+    # rather than left to the first consumer to discover.
+    - name: Include the role under test with nothing declared
+      ansible.builtin.include_role:
+        name: vm_files
+      vars:
+        vm_files_entries: []

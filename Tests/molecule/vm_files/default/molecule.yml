@@ -62,24 +62,35 @@ provisioner:
 
         # A directory that already exists on the VM before the role runs,
         # owned by neither root nor 0755 so that "the role left it alone"
-        # is an observable claim rather than a coincidence.
-        preexisting_dir: /srv/vm-files-existing
-        preexisting_dir_owner: nobody
-        preexisting_dir_group: nogroup
-        preexisting_dir_mode: "0711"
+        # is an observable claim rather than a coincidence. One mapping
+        # rather than four flat vars: it describes a single object, and
+        # prepare and verify want all of it or none of it.
+        preexisting_dir:
+          path: /srv/vm-files-existing
+          owner: nobody
+          group: nogroup
+          mode: "0711"
+
+        # A target that already exists and is wrong in every dimension the
+        # role enforces - content, owner and mode. Prepare plants it; no
+        # var records its wrong state, because the assertions verify makes
+        # about it are the same ones it makes about every other target.
+        drifted_target: /srv/vm-files-drifted.conf
 
         # Already in the role's entry shape, so converge passes it
         # straight through with no projection - the scenario declares
         # exactly what an operator's config would.
         #
-        # Two entries, one per parent-directory case: the first has to
-        # create a parent (two levels of it), the second writes into the
-        # pre-existing directory above.
+        # One entry per case: a parent that must be created (two levels of
+        # it), a parent that already exists, and a target that already
+        # exists.
         fixture_entries:
           - source: "{{ fixture_dir }}/app.conf"
             target: /etc/vm-files/deep/app.conf
           - source: "{{ fixture_dir }}/lib.json"
-            target: "{{ preexisting_dir }}/lib.json"
+            target: "{{ preexisting_dir.path }}/lib.json"
+          - source: "{{ fixture_dir }}/drifted.conf"
+            target: "{{ drifted_target }}"
 
 verifier:
   name: ansible
