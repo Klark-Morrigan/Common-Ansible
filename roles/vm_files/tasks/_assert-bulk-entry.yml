@@ -56,11 +56,15 @@
 # Absent is legal and means false, so the check is on the value only when
 # the operator supplied one - `default(false)` collapses "absent" onto the
 # documented default rather than treating it as a type violation.
+#
+# fail_msg needs the same default even though it is only ever READ on a
+# violation: every option of a task is templated when the task runs, so an
+# absent flag would blow up here on the passing path.
 - name: Assert each optional bulk form flag is a boolean
   ansible.builtin.assert:
     that:
       - vm_files_entry[item] | default(false) is boolean
     fail_msg: >-
       {{ vm_files_entry_ctx }}.{{ item }} must be a boolean
-      (got '{{ vm_files_entry[item] }}').
+      (got '{{ vm_files_entry[item] | default('') }}').
   loop: "{{ vm_files_bulk_flag_fields }}"
