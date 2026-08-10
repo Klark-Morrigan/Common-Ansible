@@ -15,8 +15,11 @@
 # dispatcher that discriminates the two forms, plus one file per form -
 # for the same reason it exists there: the forms evolve independently.
 #
-# TODO: transport. The role validates the contract and copies nothing yet,
-# so a play including it today reconciles no files.
+# Validation done, the role resolves the declared entries into flat
+# source/target pairs and hands that one list to a single transport. The
+# two forms differ only in how many pairs they produce, so keeping
+# resolution and transport apart is what stops the ownership policy from
+# being stated (and drifting) once per form.
 
 - name: Assert the declared file entries are a list
   ansible.builtin.assert:
@@ -42,3 +45,20 @@
     # reject - so the label is its position, which is also what every
     # rejection message names.
     label: "vm_files_entries[{{ vm_files_entry_index }}]"
+
+# The single form already IS a source/target pair, so resolving it is a
+# filter and nothing more. Selecting on `source` is what discriminates the
+# form here, and it is exact rather than merely convenient: the validation
+# above has already rejected any entry carrying both discriminators or
+# neither.
+#
+# TODO: bulk resolution. A `pattern` entry expands to one pair per matched
+# file and is not expanded yet, so a play declaring one has its entry
+# validated and then copies nothing for it.
+- name: Resolve the single form file entries to source and target pairs
+  ansible.builtin.set_fact:
+    vm_files_resolved: >-
+      {{ vm_files_entries | selectattr('source', 'defined') | list }}
+
+- name: Copy every resolved file onto the VM
+  ansible.builtin.include_tasks: _copy-resolved-files.yml

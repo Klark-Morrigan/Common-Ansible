@@ -1,0 +1,113 @@
+---
+# Verify - the state the transport produced. Idempotence (a re-run
+# reporting changed=0) is proven separately by the default sequence's
+# `molecule idempotence` phase; everything here is about what landed.
+#
+# Ownership and mode are asserted explicitly rather than left to speak for
+# themselves. root:root 0644 is a policy the role states on every copy, so
+# it is an invariant an operator can rely on - and an invariant nothing
+# asserts is one that survives being deleted.
+
+- name: Verify - single form transport post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    # The first fixture entry is the missing-parent case: both levels
+    # below it had to be created, the outer one only as an intermediate.
+    created_parent_dirs:
+      - "{{ fixture_entries[0].target | dirname }}"
+      - "{{ fixture_entries[0].target | dirname | dirname }}"
+  tasks:
+    - name: Stat every copied target
+      ansible.builtin.stat:
+        path: "{{ item.target }}"
+      become: true
+      loop: "{{ fixture_entries }}"
+      loop_control:
+        label: "{{ item.target }}"
+      register: copied_targets
+
+    - name: Assert every target is a regular file owned root root at 0644
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == '0644'
+        fail_msg: >-
+          {{ item.item.target }} did not land as a root:root 0644 regular
+          file; stat: {{ item.stat }}
+      loop: "{{ copied_targets.results }}"
+      loop_control:
+        label: "{{ item.item.target }}"
+
+    # Content, not merely presence: a transport that created empty files
+    # at the right paths with the right modes would satisfy every
+    # assertion above.
+    - name: Slurp every copied target
+      ansible.builtin.slurp:
+        src: "{{ item.target }}"
+      become: true
+      loop: "{{ fixture_entries }}"
+      loop_control:
+        label: "{{ item.target }}"
+      register: copied_content
+
+    - name: Assert every target carries its own fixture content
+      ansible.builtin.assert:
+        that:
+          - >-
+            (item.content | b64decode)
+            == 'vm_files fixture for ' ~ item.item.target
+        fail_msg: >-
+          {{ item.item.target }} holds the wrong bytes:
+          {{ item.content | b64decode }}
+      loop: "{{ copied_content.results }}"
+      loop_control:
+        label: "{{ item.item.target }}"
+
+    - name: Stat the parent directories the role had to create
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      become: true
+      loop: "{{ created_parent_dirs }}"
+      register: created_dirs
+
+    - name: Assert each created parent directory is root root at 0755
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isdir
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == '0755'
+        fail_msg: >-
+          {{ item.item }} is not a root:root 0755 directory;
+          stat: {{ item.stat }}
+      loop: "{{ created_dirs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # The complement of the assertion above, and the reason the role stats
+    # before it declares a directory: writing INTO an existing directory
+    # must not re-own or re-mode it. Without this, a `file: state=directory`
+    # applied unconditionally would pass every other check here while
+    # quietly chowning an operator's directory to root.
+    - name: Stat the directory that already existed before the run
+      ansible.builtin.stat:
+        path: "{{ preexisting_dir }}"
+      become: true
+      register: preexisting_stat
+
+    - name: Assert the pre-existing directory kept its owner group and mode
+      ansible.builtin.assert:
+        that:
+          - preexisting_stat.stat.isdir
+          - preexisting_stat.stat.pw_name == preexisting_dir_owner
+          - preexisting_stat.stat.gr_name == preexisting_dir_group
+          - preexisting_stat.stat.mode == preexisting_dir_mode
+        fail_msg: >-
+          {{ preexisting_dir }} was modified by the run; expected
+          {{ preexisting_dir_owner }}:{{ preexisting_dir_group }}
+          {{ preexisting_dir_mode }}, stat: {{ preexisting_stat.stat }}

@@ -10,17 +10,16 @@ redesigned: a definition a consumer's config already carries is valid here
 unchanged, and is accepted or rejected identically whichever engine runs
 it.
 
-**TODO: transport.** What the role owns today is the contract and its
-validation - it copies nothing yet, so a play including it reconciles no
-files. The sections below describe the contract, which is complete; the
-[consuming example](#consuming-this-role) declares what will be
-transported rather than what is transported today.
+**TODO: bulk transport.** The single form is transported; the bulk form
+is validated and then expands to nothing, so a play declaring a `pattern`
+entry copies no files for it yet.
 
 ## Index
 
 - [Entry contract](#entry-contract)
 - [Why the role validates its own input](#why-the-role-validates-its-own-input)
 - [What is deliberately not validated](#what-is-deliberately-not-validated)
+- [Transport](#transport)
 - [Consuming this role](#consuming-this-role)
 - [Tests](#tests)
 
@@ -69,10 +68,11 @@ there too - the two forms evolve independently:
 
 | File | Owns |
 | --- | --- |
-| [`tasks/main.yml`](tasks/main.yml) | The list-shaped container, then the per-entry loop |
+| [`tasks/main.yml`](tasks/main.yml) | The list-shaped container, the per-entry loop, then resolution and transport |
 | [`tasks/_assert-entry.yml`](tasks/_assert-entry.yml) | Checks shared by both forms, and the discrimination between them |
 | [`tasks/_assert-single-entry.yml`](tasks/_assert-single-entry.yml) | Single-form rules |
 | [`tasks/_assert-bulk-entry.yml`](tasks/_assert-bulk-entry.yml) | Bulk-form rules |
+| [`tasks/_copy-resolved-files.yml`](tasks/_copy-resolved-files.yml) | The transport, shared by both forms |
 
 The allow-lists the unknown-sub-field rules read live in
 [`vars/main.yml`](vars/main.yml), not `defaults/`, precisely so a consumer
@@ -88,6 +88,38 @@ cannot widen one locally and fork the schema.
 - **That a `pattern` matches anything.** A glob is time-varying; the
   resolution the transport performs is the only one whose answer is still
   true when the files are read.
+
+## Transport
+
+Validation done, the role resolves every declared entry into a flat list
+of source/target pairs and hands that one list to a single transport. The
+two forms differ only in how many pairs each produces - the single form is
+already a pair, a bulk one expands to many - so resolution is per form and
+transport is not. That is what keeps the ownership policy from being
+stated twice and drifting.
+
+Each file is copied with `ansible.builtin.copy`, which means the bytes
+travel inside the connection the play is already using; no listener is
+opened on the host and nothing is published on the network for the
+duration of a run.
+
+Files land **root-owned and `0644`**, and directories the role creates
+land **root-owned and `0755`**. Both are stated on the task rather than
+inherited from the source. Whatever attributes a file carries on the
+controller are an accident of how it got there - a checkout, a download,
+a Windows volume with no POSIX modes at all - and none of that should
+decide what the VM ends up with. User-owned content is out of scope: it
+belongs to the users layer, which runs once the users it would be owned
+by actually exist.
+
+A missing parent directory is created, including intermediate levels. It
+is created only where one is genuinely **absent** - the role stats first
+rather than declaring the directory outright, because a
+`file: state=directory` carrying owner and mode reasserts them on a
+directory that already exists, and an entry targeting (say) a home
+directory would then silently chown it to root. Creating what is missing
+and touching nothing else keeps the role's writes confined to the files
+it was asked to copy.
 
 ## Consuming this role
 
@@ -107,6 +139,15 @@ With no `vm_files_entries` the role is a no-op, so a play can always
 include it and let config decide whether there is anything to copy.
 
 ## Tests
+
+`Tests/molecule/vm_files/default` covers the single form transport. Its
+fixtures are staged on the controller mode `0600` and owned by whoever
+runs the scenario, so the verifier's `root:root 0644` assertions prove the
+policy is applied rather than merely inherited. Two entries cover the two
+parent-directory cases - one whose parents must be created, one writing
+into a directory that already exists - and that second directory is
+deliberately neither root-owned nor `0755`, so "the role left it alone" is
+an observable claim. `molecule idempotence` covers the re-run.
 
 `Tests/molecule/vm_files/schema` covers the contract from both sides. Its
 `converge.yml` is the positive control - a well-formed entry set using

@@ -1,0 +1,44 @@
+---
+# Prepare - stage what the converge copies FROM, and one directory it
+# copies INTO.
+#
+# The controller-side fixtures are written 0600 and owned by whoever runs
+# molecule. That is the point: the converge has to land them root:root
+# 0644 regardless, so a fixture that already matched the policy would
+# prove nothing about whether the policy is applied or merely inherited.
+#
+# Each fixture's content is derived from its target path so that the
+# verifier can name the exact bytes it expects at each destination, which
+# also catches two entries landing the same file.
+
+- name: Prepare - stage the transport fixtures
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create the controller side fixture directory
+      ansible.builtin.file:
+        path: "{{ fixture_dir }}"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+      become: false
+
+    - name: Write the controller side fixture files
+      ansible.builtin.copy:
+        dest: "{{ item.source }}"
+        content: "vm_files fixture for {{ item.target }}"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      loop: "{{ fixture_entries }}"
+      loop_control:
+        label: "{{ item.source }}"
+
+    - name: Create the pre-existing target directory on the VM
+      ansible.builtin.file:
+        path: "{{ preexisting_dir }}"
+        state: directory
+        owner: "{{ preexisting_dir_owner }}"
+        group: "{{ preexisting_dir_group }}"
+        mode: "{{ preexisting_dir_mode }}"
+      become: true

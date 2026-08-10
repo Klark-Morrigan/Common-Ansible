@@ -1,0 +1,85 @@
+---
+# Molecule scenario for the vm_files role - single form transport.
+#
+# The counterpart to the `schema` scenario: that one asserts what the role
+# refuses, this one asserts what it does with what it accepts. The default
+# sequence's `idempotence` phase is the point of running the transport
+# here rather than folding it into the schema converge - a copy that
+# re-reports `changed` on an already-converged VM is the failure this
+# scenario exists to catch.
+#
+# Single Ubuntu 24.04 container, Docker driver, ansible verifier. The role
+# only writes files, so a non-systemd sleep-infinity container suffices.
+#
+# Image: reuses the toolchain_host_push base (python3 + sudo on
+# ubuntu:24.04). No custom Dockerfile - build it via the command in
+# Tests/molecule/toolchain_host_push/Dockerfile.
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: instance
+    image: common-ansible/toolchain-host-push-base:24.04
+    pre_build_image: true
+    command: /bin/sleep infinity
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  env:
+    # ANSIBLE_ROLES_PATH (env) wins over ansible.cfg's roles_path and
+    # propagates across every molecule phase. MOLECULE_PROJECT_DIRECTORY
+    # is the scenario dir; three levels up is the repo root, then roles/.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../../roles"
+  config_options:
+    defaults:
+      stdout_callback: yaml
+      callbacks_enabled: profile_tasks
+  inventory:
+    host_vars:
+      instance:
+        ansible_user: root
+
+        # The fixture contract, stated once here because all three phases
+        # need it: prepare stages it, converge declares it, verify
+        # asserts against it. Ansible resolves these lazily at task time,
+        # so the lookup below runs on the controller when it is first
+        # used rather than when molecule writes the inventory.
+        #
+        # Staging into molecule's per-scenario ephemeral directory keeps
+        # the fixtures out of the repo working tree and lets `molecule
+        # destroy` take them with it.
+        fixture_dir: >-
+          {{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/vm-files-fixture
+
+        # A directory that already exists on the VM before the role runs,
+        # owned by neither root nor 0755 so that "the role left it alone"
+        # is an observable claim rather than a coincidence.
+        preexisting_dir: /srv/vm-files-existing
+        preexisting_dir_owner: nobody
+        preexisting_dir_group: nogroup
+        preexisting_dir_mode: "0711"
+
+        # Already in the role's entry shape, so converge passes it
+        # straight through with no projection - the scenario declares
+        # exactly what an operator's config would.
+        #
+        # Two entries, one per parent-directory case: the first has to
+        # create a parent (two levels of it), the second writes into the
+        # pre-existing directory above.
+        fixture_entries:
+          - source: "{{ fixture_dir }}/app.conf"
+            target: /etc/vm-files/deep/app.conf
+          - source: "{{ fixture_dir }}/lib.json"
+            target: "{{ preexisting_dir }}/lib.json"
+
+verifier:
+  name: ansible

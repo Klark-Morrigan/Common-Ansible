@@ -12,11 +12,11 @@
 # The rejection matrix lives in verify.yml, keeping deliberate failures
 # out of the run whose changed-count is being measured.
 #
-# Single Ubuntu 24.04 container, Docker driver, ansible verifier. The role
-# only validates here - it touches nothing on the target - but the
-# scenario still runs against the shared base image so it matches every
-# other scenario in the repo rather than introducing a delegated-driver
-# special case.
+# Single Ubuntu 24.04 container, Docker driver, ansible verifier. What
+# the accepted entries then transport is not this scenario's subject -
+# Tests/molecule/vm_files/default owns that - but they are real, copyable
+# files precisely so acceptance here means an entry that would genuinely
+# survive a run rather than one that merely parses.
 #
 # Image: reuses the toolchain_host_push base (python3 + sudo on
 # ubuntu:24.04). No custom Dockerfile - build it via the command in

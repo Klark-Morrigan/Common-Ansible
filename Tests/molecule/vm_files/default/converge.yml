@@ -1,0 +1,18 @@
+---
+# Converge - copy the declared single form entries onto the VM.
+#
+# Also what `molecule idempotence` re-runs, so it is this play that has to
+# report changed=0 on a converged VM.
+#
+# include_role (not import_role) defers resolution to runtime so the
+# molecule.yml ANSIBLE_ROLES_PATH override is honoured.
+
+- name: Converge - transport the declared single form file entries
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: vm_files
+      vars:
+        vm_files_entries: "{{ fixture_entries }}"
