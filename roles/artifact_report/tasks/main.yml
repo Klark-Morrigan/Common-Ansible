@@ -1,0 +1,17 @@
+---
+# Render the accumulated artifact report for this host.
+#
+# Structure mirrors toolchain_report exactly: this role owns the entry
+# contract (defaults/main.yml) and the layout
+# (templates/artifact-report.j2), and report_render owns the shared
+# mechanics. See toolchain_report/tasks/main.yml for why the lookup stays
+# in the calling role's scope.
+
+- name: Render and print the artifact report
+  ansible.builtin.include_role:
+    name: report_render
+  vars:
+    report_render_text: >-
+      {{ lookup('ansible.builtin.template', 'artifact-report.j2') }}
+    report_render_fact: artifact_report_lines
+    report_render_label: resident toolchain artifacts for this host

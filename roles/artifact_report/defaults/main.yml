@@ -1,0 +1,67 @@
+---
+# Defaults and the input contract for the artifact_report role.
+#
+# This role installs nothing. It renders where each toolchain's ARTIFACT -
+# the tarball or package the install unpacked - came from and where it sits
+# on the VM right now. Its sibling toolchain_report answers "what is
+# installed and what does it own"; this one answers "what was fetched,
+# from where, and is it still there".
+#
+# The two are separate because they answer different failure questions. A
+# broken build on the VM is usually diagnosed by walking backwards from the
+# binary to the artifact it came out of: is the tarball still in the cache,
+# is it the size it should be, when did it land, and did the extract
+# actually produce the install directory the manifest claims. That chain is
+# invisible in a normal run - the download is skipped on a cache hit, and
+# on a fully converged run the acquisition code never executes at all.
+#
+# Hence residency is PROBED, not inferred. Every producing role stats the
+# artifact and its unpacked directory for each DESIRED version, whether or
+# not this run touched them, so the report describes the VM as it is rather
+# than as this run left it.
+#
+# The accumulator name carries no role prefix on purpose: it is a
+# cross-role contract, like host_file_server_base_url, written by three
+# roles and read by this one. That is why every producing role's append
+# task carries `# noqa: var-naming[no-role-prefix]` - the rule assumes a
+# var set inside a role belongs to that role, which is exactly what this
+# one does not do. Documented here, once, rather than at each site.
+#
+# artifact_report_entries - appended by the producing roles, never set by
+# an operator. Each entry:
+#
+#   tool       (required) Tool identity ("jdk", "dotnet",
+#                         "dotnet-reportgenerator-globaltool",
+#                         "bats-support").
+#   version    (required) Version string.
+#   section    (required) host-push (fetched from the controller's file
+#                         server) | vm-download (the VM fetches it itself).
+#   source     (required) URL the artifact is fetched from.
+#   transfer   (required) What THIS run did: downloaded (bytes moved) |
+#                         reused-cache (needed it, found it already on the
+#                         VM) | none (nothing to install, so nothing was
+#                         fetched).
+#   artifact   (required) The fetched file, as probed. One nested dict
+#                         rather than four flat keys, because every field
+#                         is a facet of a single `stat` and a producer
+#                         should not have to restate four names:
+#                           path     Where it resides on the VM. "" when
+#                                    the mechanism retains nothing - see
+#                                    note.
+#                           present  Does path exist NOW.
+#                           size     Bytes; 0 when absent.
+#                           mtime    Epoch seconds; 0 when absent.
+#                                    Rendered only when non-zero.
+#                           note     One line explaining a mechanism that
+#                                    retains no artifact, so an empty path
+#                                    reads as "by design", not as "lost".
+#                                    Only meaningful when path is "".
+#   unpacked   (required) The extract target, as probed:
+#                           dir      Directory the artifact was unpacked
+#                                    into.
+#                           present  Does dir exist NOW. A false here
+#                                    against a tool the toolchain report
+#                                    calls installed is the headline
+#                                    diagnostic - the manifest claims a
+#                                    directory that is gone.
+artifact_report_entries: []

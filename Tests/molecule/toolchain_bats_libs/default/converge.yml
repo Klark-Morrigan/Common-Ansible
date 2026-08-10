@@ -20,3 +20,67 @@
     - name: Include the role under test
       ansible.builtin.include_role:
         name: toolchain_bats_libs
+
+    # Both accumulators are facts, so they cannot be asserted from
+    # verify.yml (a separate ansible-playbook run with no fact cache).
+    #
+    # Two libraries are converged, which is what makes this the only
+    # scenario that proves the accumulators APPEND rather than overwrite -
+    # a producer that assigned instead of appending would leave one entry
+    # here and pass every single-item scenario.
+    #
+    # Status/transfer are asserted as sets because molecule runs this play
+    # twice: the first pass installs (marker absent), the second skips
+    # every task (marker present). The paths must hold identically on both.
+    - name: Assert both libraries reached the toolchain report
+      ansible.builtin.assert:
+        that:
+          - toolchain_report_entries | length == 2
+          - support.version == '0.3.0'
+          - support.section == 'vm-download'
+          - support.status in ['installed', 'present']
+          - support.install_dir == '/usr/lib/bats-support'
+          - support.files == ['/usr/lib/bats-support/load.bash',
+                              '/usr/lib/bats-support/.installed-v0.3.0']
+          - assert_lib.version == '2.1.0'
+          - assert_lib.install_dir == '/usr/lib/bats-assert'
+        fail_msg: >-
+          toolchain_report_entries did not describe both libraries:
+          {{ toolchain_report_entries }}
+      vars:
+        support: >-
+          {{ toolchain_report_entries
+             | selectattr('tool', 'equalto', 'bats-support') | first }}
+        assert_lib: >-
+          {{ toolchain_report_entries
+             | selectattr('tool', 'equalto', 'bats-assert') | first }}
+
+    # The artifact side. These libraries retain nothing on the VM - the
+    # tag tarball is streamed straight into the library directory - so the
+    # entry must carry an empty path WITH a note, and prove residency via
+    # the load.bash probe rather than via a cached file.
+    - name: Assert both libraries reached the artifact report
+      ansible.builtin.assert:
+        that:
+          - artifact_report_entries | length == 2
+          - support.section == 'vm-download'
+          - support.source ==
+            'https://github.com/bats-core/bats-support/archive/refs/tags/v0.3.0.tar.gz'
+          - support.transfer in ['downloaded', 'none']
+          - support.artifact.path == ''
+          - support.artifact.note | length > 0
+          - support.unpacked.dir == '/usr/lib/bats-support'
+          # Probed, not assumed - load.bash is what bats_load_library
+          # actually sources.
+          - support.unpacked.present
+          - assert_lib.unpacked.present
+        fail_msg: >-
+          artifact_report_entries did not describe both libraries:
+          {{ artifact_report_entries }}
+      vars:
+        support: >-
+          {{ artifact_report_entries
+             | selectattr('tool', 'equalto', 'bats-support') | first }}
+        assert_lib: >-
+          {{ artifact_report_entries
+             | selectattr('tool', 'equalto', 'bats-assert') | first }}

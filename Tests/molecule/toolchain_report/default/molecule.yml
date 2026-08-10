@@ -1,0 +1,116 @@
+---
+# Molecule scenario for the toolchain_report role - render a representative
+# entry set and assert the resulting text.
+#
+# The entry set is seeded through inventory host_vars rather than in
+# converge.yml on purpose: molecule's ansible verifier runs a SEPARATE
+# ansible-playbook invocation, so facts set during converge are gone by
+# verify time. An inventory var is visible to both plays, which lets
+# verify.yml re-render from the same single source and assert on it.
+#
+# It covers, in one host: all three sections, all three statuses, a
+# host-push entry carrying both symlinks and files, and a dpkg-managed
+# entry carrying neither (which must render the explanatory line rather
+# than an empty block).
+#
+# Single Ubuntu 24.04 container, Docker driver, ansible verifier. The role
+# only templates and sets a fact - it touches nothing on the target - but
+# the scenario still runs against the shared base image so it matches every
+# other scenario in the repo rather than introducing a delegated-driver
+# special case.
+#
+# Image: reuses the toolchain_host_push base (python3 + sudo on
+# ubuntu:24.04). No custom Dockerfile - build it via the command in
+# Tests/molecule/toolchain_host_push/Dockerfile.
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: instance
+    image: common-ansible/toolchain-host-push-base:24.04
+    pre_build_image: true
+    command: /bin/sleep infinity
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  env:
+    # ANSIBLE_ROLES_PATH (env) wins over ansible.cfg's roles_path and
+    # propagates across every molecule phase. MOLECULE_PROJECT_DIRECTORY
+    # is the scenario dir; three levels up is the repo root, then roles/.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../../roles"
+  config_options:
+    defaults:
+      stdout_callback: yaml
+      callbacks_enabled: profile_tasks
+  inventory:
+    host_vars:
+      instance:
+        ansible_user: root
+        toolchain_report_entries:
+          # Section 1, already converged, with the full footprint a
+          # host-push manifest records.
+          - tool: faketool
+            version: "1.0.0"
+            section: host-push
+            status: present
+            install_dir: /opt/faketool-1.0.0
+            symlinks:
+              - path: /usr/local/bin/faketool
+                target: /opt/faketool-1.0.0/bin/faketool
+              - path: /usr/local/bin/faketool-cli
+                target: /opt/faketool-1.0.0/bin/faketool-cli
+            files:
+              - /etc/profile.d/faketool.sh
+          # Section 1, installed by this run, exercising owned_files.
+          - tool: fakesdk
+            version: "9.9.900"
+            section: host-push
+            status: installed
+            install_dir: /opt/fakesdk-9.9.900
+            symlinks:
+              - path: /usr/local/bin/fakesdk
+                target: /opt/fakesdk-9.9.900/fakesdk
+            files:
+              - /etc/fakesdk/install_location
+          # Section 1, torn down by this run. A removed entry still carries
+          # its full path record - the report is built from the stale
+          # manifest, which is exactly what uninstall consumed - so the
+          # operator can see what left the VM, not just that something did.
+          - tool: fakesdk
+            version: "8.0.100"
+            section: host-push
+            status: removed
+            install_dir: /opt/fakesdk-8.0.100
+            symlinks:
+              - path: /usr/local/bin/fakesdk
+                target: /opt/fakesdk-8.0.100/fakesdk
+            files:
+              - /etc/fakesdk/install_location
+          # Section 2, dpkg-managed: no paths at all.
+          - tool: fakepkg
+            version: "0.9.0-1"
+            section: vm-download
+            status: present
+            install_dir: ""
+            symlinks: []
+            files: []
+          # Section 3, the daemon presence gate.
+          - tool: docker
+            version: "5:27.3.1-1~ubuntu.24.04~noble"
+            section: base-image
+            status: present
+            install_dir: ""
+            symlinks: []
+            files: []
+
+verifier:
+  name: ansible

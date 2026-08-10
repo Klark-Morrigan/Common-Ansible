@@ -114,6 +114,17 @@ For each desired tool with no manifest
    version, composite key, store dir, shim symlinks, and command names.
 6. Wipe the staging dir (best-effort).
 
+After the diff, two recording steps append to the per-host reports and
+change no state on the VM:
+[`tasks/_record-report.yml`](tasks/_record-report.yml) records what was
+installed / left alone / removed for the
+[toolchain report](../toolchain_report/README.md), and
+[`tasks/_record-artifacts.yml`](tasks/_record-artifacts.yml) probes the
+`.store` slot and records the package's provenance for the
+[artifact report](../artifact_report/README.md). Tools are tagged
+`host-push` there: the `.nupkg` is staged on the controller and pulled
+over the substrate file server exactly like a tarball toolchain.
+
 ## How it uninstalls a tool
 
 For each installed tool no longer desired
@@ -185,6 +196,14 @@ exactly as production) served together with fake `.nupkg` packages from one
   SDK is removed - proving the manifest-driven uninstall frees the store
   without the driver. This is the regression guard for the driver-independent
   teardown.
+
+Both report accumulators are facts, so they cannot be asserted from
+`verify.yml` (a separate `ansible-playbook` run with no fact cache) - the
+**default** scenario's `converge.yml` asserts them instead: the toolchain
+entry's `.store` install dir and shim symlinks, and the artifact entry's
+source URL plus its empty-path-with-a-note (the `.nupkg` is staged then
+wiped, and an empty path with no note would read as "lost" rather than
+"by design").
 
 ## Parity with the PowerShell reconciler
 

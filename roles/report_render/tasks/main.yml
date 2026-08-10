@@ -1,0 +1,29 @@
+---
+# Split a caller-rendered report into lines, leave them in the fact the
+# caller named, and print them. The rationale for each of the three
+# mechanics below (splitlines vs split, list vs string, trim) lives in
+# defaults/main.yml - stated once for every report rather than repeated in
+# each report role.
+
+- name: Assert the caller supplied report text and a fact name
+  ansible.builtin.assert:
+    that:
+      - report_render_fact | length > 0
+    fail_msg: >-
+      report_render requires report_render_fact - the name of the fact to
+      leave the split lines in.
+
+# The fact NAME is templated from a var, which is what lets one role serve
+# every report while each keeps its own documented output contract.
+- name: Build the report lines
+  ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix]
+    "{{ report_render_fact }}": "{{ (report_render_text | trim).splitlines() }}"
+
+# Read the fact back by name rather than reusing the expression above, so
+# what is printed is provably the same value a test asserts on.
+# The label is interpolated at the END of the name, not mid-string:
+# ansible-lint's `name[template]` rule requires it, so the label carries
+# the whole trailing phrase rather than just a noun.
+- name: Report the {{ report_render_label }}
+  ansible.builtin.debug:
+    msg: "{{ lookup('ansible.builtin.vars', report_render_fact) }}"

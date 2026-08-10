@@ -117,3 +117,95 @@
     label: "{{ item.item.name }}-{{ item.item.version }}"
   when: not item.stat.exists
   become: true
+
+# Append one entry per library to the play-wide report accumulator the
+# toolchain_report role renders per host. The marker probe above is also
+# the status source: a marker that already existed means this run left the
+# library alone, an absent one means every task above just (re)built it.
+# load.bash is named explicitly because it is the file consumers actually
+# resolve through BATS_LIB_PATH - the one path worth checking by hand when
+# `bats_load_library` fails.
+- name: Append the bats libraries to the toolchain report
+  ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix]
+    toolchain_report_entries: >-
+      {{ (toolchain_report_entries | default([])) + [entry] }}
+  loop: "{{ toolchain_bats_libs_markers.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}-{{ item.item.version }}"
+  vars:
+    library_dir: "{{ toolchain_bats_libs_base_dir }}/{{ item.item.name }}"
+    entry:
+      tool: "{{ item.item.name }}"
+      version: "{{ item.item.version }}"
+      section: vm-download
+      status: "{{ 'present' if item.stat.exists else 'installed' }}"
+      install_dir: "{{ library_dir }}"
+      symlinks: []
+      files:
+        - "{{ library_dir }}/load.bash"
+        - "{{ library_dir }}/.installed-v{{ item.item.version }}"
+
+# Probe what each library actually resolves through. load.bash - not the
+# directory - is what `bats_load_library <name>` sources, so its absence is
+# the precise failure an operator is chasing when a suite dies with
+# "unable to load". Probed unconditionally: on a converged run every
+# install task above is skipped, which is exactly when this is worth
+# knowing.
+- name: Stat each library's load.bash entry point
+  ansible.builtin.stat:
+    path: "{{ toolchain_bats_libs_base_dir }}/{{ item.name }}/load.bash"
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  become: true
+  loop: "{{ toolchain_bats_libs_packages }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: toolchain_bats_libs_load_stat
+
+# Append to the artifact report. Nothing is retained: the role unarchives
+# the GitHub tag tarball with remote_src straight into the library
+# directory, so the tarball is streamed and never lands as a file on the
+# VM. The entry says so rather than reporting an empty path.
+- name: Append the bats library artifacts to the artifact report
+  ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix]
+    artifact_report_entries: >-
+      {{ (artifact_report_entries | default([])) + [entry] }}
+  loop: "{{ toolchain_bats_libs_packages }}"
+  loop_control:
+    label: "{{ item.name }}-{{ item.version }}"
+    index_var: toolchain_bats_libs_artifact_index
+  vars:
+    load_stat: >-
+      {{ toolchain_bats_libs_load_stat.results[
+         toolchain_bats_libs_artifact_index].stat }}
+    marker_existed: >-
+      {{ toolchain_bats_libs_markers.results[
+         toolchain_bats_libs_artifact_index].stat.exists }}
+    entry:
+      tool: "{{ item.name }}"
+      version: "{{ item.version }}"
+      section: vm-download
+      source: >-
+        https://github.com/{{ toolchain_bats_libs_github_owner }}/{{
+        item.name }}/archive/refs/tags/v{{ item.version }}.tar.gz
+      # The marker probe from the top of this file is the acquisition
+      # record: an absent marker is what drove the (re)install, so bytes
+      # moved; a present one means every fetch task was skipped.
+      transfer: "{{ 'none' if marker_existed else 'downloaded' }}"
+      # An empty path is what marks a mechanism that retains nothing; the
+      # note is what stops that reading as "lost" instead of "by design".
+      artifact:
+        path: ""
+        present: false
+        size: 0
+        mtime: 0
+        note: >-
+          the tag tarball is streamed into the library directory by
+          remote_src unarchive, so it never lands as a file; presence
+          below is probed via that directory's load.bash
+      unpacked:
+        dir: "{{ toolchain_bats_libs_base_dir }}/{{ item.name }}"
+        # Cast explicitly - the report's counters test truthiness, and the
+        # STRING "False" is truthy.
+        present: "{{ load_stat.exists | bool }}"

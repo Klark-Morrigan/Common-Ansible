@@ -27,3 +27,65 @@
     - name: Include the role under test
       ansible.builtin.include_role:
         name: toolchain_host_push
+
+    # The report accumulator is a fact, so it cannot be asserted from
+    # verify.yml (a separate ansible-playbook run with no fact cache) -
+    # these checks live here instead.
+    #
+    # Status is asserted as a SET rather than a value on purpose: molecule
+    # runs this play twice (converge, then idempotence), and the same
+    # version is legitimately "installed" on the first pass and "present"
+    # on the second. Both passes exercise a different code path in
+    # _record-report.yml - the post-install manifest re-read, then the
+    # pre-reconcile seed - and both must yield identical paths, which is
+    # what the rest of the assertions pin down.
+    - name: Assert the role recorded faketool in the toolchain report
+      ansible.builtin.assert:
+        that:
+          - toolchain_report_entries | length == 1
+          - entry.tool == 'faketool'
+          - entry.version == '1.0.0'
+          - entry.section == 'host-push'
+          - entry.status in ['installed', 'present']
+          - entry.install_dir == '/opt/faketool-1.0.0'
+          - entry.symlinks | length == 1
+          - entry.symlinks[0].path == '/usr/local/bin/faketool'
+          - entry.symlinks[0].target == '/opt/faketool-1.0.0/bin/faketool'
+          - entry.files == ['/etc/profile.d/faketool.sh']
+        fail_msg: >-
+          toolchain_report_entries did not describe the install:
+          {{ toolchain_report_entries }}
+      vars:
+        entry: "{{ toolchain_report_entries | first }}"
+
+    # The artifact accumulator is the only place the stat plumbing runs
+    # against real files rather than seeded fixtures, so it is asserted
+    # here - the artifact_report scenario covers rendering, not probing.
+    #
+    # transfer is asserted as a SET for the same reason as status above:
+    # the first pass downloads (empty cache, empty box), the idempotence
+    # pass installs nothing at all. The residency facts must hold on both,
+    # and they are what the report actually exists to state.
+    - name: Assert the role probed and recorded faketool's artifact
+      ansible.builtin.assert:
+        that:
+          - artifact_report_entries | length == 1
+          - entry.tool == 'faketool'
+          - entry.version == '1.0.0'
+          - entry.section == 'host-push'
+          - entry.source == 'http://127.0.0.1:18811/faketool-1.0.0.tar.gz'
+          - entry.transfer in ['downloaded', 'none']
+          - entry.artifact.path ==
+            '/var/cache/common-ansible/toolchains/faketool-1.0.0.tar.gz'
+          # Probed, not assumed: the tarball must still be in the cache,
+          # non-empty, and the extract target must exist.
+          - entry.artifact.present
+          - entry.artifact.size | int > 0
+          - entry.artifact.mtime | int > 0
+          - entry.unpacked.dir == '/opt/faketool-1.0.0'
+          - entry.unpacked.present
+        fail_msg: >-
+          artifact_report_entries did not describe the artifact:
+          {{ artifact_report_entries }}
+      vars:
+        entry: "{{ artifact_report_entries | first }}"

@@ -70,6 +70,20 @@ For each entry, reconciles `<base>/<name>/` against the pinned tag:
    downloads and extracts the tag tarball (`--strip-components=1` drops the
    GitHub `<owner>-<repo>-<sha>/` top dir so `load.bash` and `src/` land
    directly), then writes the marker last.
+4. Probes each library's `load.bash` - the file `bats_load_library <name>`
+   actually sources, so its absence is the precise failure behind an
+   "unable to load" suite. Probed unconditionally: on a converged run
+   every install task above is skipped, which is exactly when this is
+   worth knowing.
+5. Appends one entry per library to the per-host
+   [toolchain report](../toolchain_report/README.md) and one to the
+   [artifact report](../artifact_report/README.md). The marker probe from
+   step 2 doubles as the status source - a marker that already existed
+   means this run left the library alone. The artifact entry carries an
+   empty path plus a note: the tag tarball is streamed straight into the
+   library directory by `remote_src` unarchive, so it never lands as a
+   file, and the note is what stops that reading as "lost" rather than
+   "by design".
 
 ```mermaid
 flowchart LR
@@ -78,6 +92,9 @@ flowchart LR
   PROBE -->|marker absent| WIPE[remove prior tree]
   WIPE --> DL[download + extract pinned tag]
   DL --> MARK[write .installed-v marker]
+  MARK --> LOAD[probe load.bash]
+  SKIP --> LOAD
+  LOAD --> REP[report entries: toolchain + artifact]
 ```
 
 ## Idempotence
@@ -131,3 +148,11 @@ container:
   on disk, and runs a trivial `.bats` file that `bats_load_library`s both
   libraries and uses an `assert` - proving the baked libraries are not just
   present but loadable by a real bats run.
+
+Both report accumulators are facts, so they cannot be asserted from
+`verify.yml` (a separate `ansible-playbook` run with no fact cache) -
+`converge.yml` asserts them instead. Because this scenario converges
+**two** libraries, it is also the only one that proves the accumulators
+*append* rather than overwrite: a producer that assigned instead of
+appending would leave a single entry here and still pass every
+single-item scenario.

@@ -17,3 +17,33 @@
     - name: Include the role under test
       ansible.builtin.include_role:
         name: docker
+
+    # The report accumulator is a fact, so it cannot be asserted from
+    # verify.yml (a separate ansible-playbook run with no fact cache).
+    #
+    # Unlike the versioned toolchains this is a presence gate, not a set to
+    # reconcile, so there is exactly one entry and its version comes from
+    # dpkg rather than from a caller pin. Status is asserted as a set:
+    # molecule runs this play twice and the engine is installed on the
+    # first pass, already present on the second.
+    - name: Assert the role recorded the engine in the toolchain report
+      ansible.builtin.assert:
+        that:
+          - toolchain_report_entries | length == 1
+          - entry.tool == 'docker'
+          - entry.section == 'base-image'
+          - entry.status in ['installed', 'present']
+          # Read from the package database, so it must be a real version
+          # string rather than an empty probe result.
+          - entry.version | length > 0
+          # dpkg owns the engine's filesystem footprint, so the entry
+          # deliberately claims no paths - the report renders that as
+          # dpkg-managed rather than as an empty block.
+          - entry.install_dir == ''
+          - entry.symlinks == []
+          - entry.files == []
+        fail_msg: >-
+          toolchain_report_entries did not describe the Docker engine:
+          {{ toolchain_report_entries }}
+      vars:
+        entry: "{{ toolchain_report_entries | first }}"

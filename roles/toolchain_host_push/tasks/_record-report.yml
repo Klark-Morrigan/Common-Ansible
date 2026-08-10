@@ -1,0 +1,93 @@
+---
+# Append this tool's outcome to the play-wide toolchain report accumulator
+# (toolchain_report_entries), which the toolchain_report role renders once
+# per host at the end of the play.
+#
+# Status is only knowable here, at the diff: `missing` names exactly the
+# versions THIS run installed, `stale` the ones it removed, and anything
+# else holding a manifest was already converged. A scan of the finished
+# filesystem could not tell those three apart - which is why the report is
+# accumulated as the reconcile happens rather than derived afterwards.
+#
+# Paths come from the manifests, not from the caller's desired-state entry:
+# a tool using `symlink_bin_dir` (the JDK's ~50 launchers) only learns its
+# full symlink set at install time, and the manifest is where that lands.
+
+# Seed from the pre-reconcile read done in main.yml. On the common
+# converged run that set is already the truth, so no second round trip is
+# spent. Seeding unconditionally also clears the previous invocation's
+# value - jdk, dotnet_sdk and powershell all drive this role in one play
+# and share these fact names.
+- name: Seed the reported manifest set from the pre-reconcile read
+  ansible.builtin.set_fact:
+    toolchain_host_push_reported: "{{ toolchain_host_push_installed }}"
+
+# Only a run that actually installed or removed something has manifests the
+# pre-reconcile read did not see (or saw and no longer exist), so the
+# re-read is gated on the diff being non-empty.
+- name: Re-read this tool's manifests after a reconcile
+  when: >-
+    (toolchain_host_push_missing | length > 0)
+    or (toolchain_host_push_stale | length > 0)
+  block:
+    - name: Find this tool's manifests after the reconcile
+      ansible.builtin.find:
+        paths: "{{ toolchain_host_push_manifest_dir }}"
+        patterns: "{{ toolchain_host_push_name }}-*.json"
+        file_type: file
+      become: true
+      register: toolchain_host_push_report_files
+
+    - name: Read each manifest the reconcile left in place
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      become: true
+      loop: >-
+        {{ toolchain_host_push_report_files.files
+           | map(attribute='path') | list }}
+      loop_control:
+        label: "{{ item }}"
+      register: toolchain_host_push_report_slurp
+
+    - name: Record the post-reconcile manifest set
+      ansible.builtin.set_fact:
+        toolchain_host_push_reported: >-
+          {{ toolchain_host_push_report_slurp.results
+             | map(attribute='content')
+             | map('b64decode')
+             | map('from_json')
+             | list }}
+
+# One entry per version, over both the surviving manifests and the stale
+# ones. The two lists are disjoint by construction - uninstall deletes a
+# stale version's manifest before this file runs - so a single loop can
+# classify by membership without double-counting.
+- name: Append this tool's versions to the toolchain report
+  ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix]
+    toolchain_report_entries: >-
+      {{ (toolchain_report_entries | default([])) + [entry] }}
+  loop: >-
+    {{ toolchain_host_push_reported + toolchain_host_push_stale }}
+  loop_control:
+    label: "{{ item.name }} {{ item.version }}"
+  vars:
+    stale_versions: >-
+      {{ toolchain_host_push_stale | map(attribute='version') | list }}
+    missing_versions: >-
+      {{ toolchain_host_push_missing | map(attribute='version') | list }}
+    entry:
+      tool: "{{ item.name }}"
+      version: "{{ item.version }}"
+      section: host-push
+      status: >-
+        {{ 'removed' if item.version in stale_versions
+           else ('installed' if item.version in missing_versions
+                 else 'present') }}
+      install_dir: "{{ item.install_dir | default('') }}"
+      symlinks: "{{ item.symlinks | default([]) }}"
+      # The manifest stores profile_script as the bare tool name (or "");
+      # the report wants the path an operator can actually open.
+      files: >-
+        {{ (['/etc/profile.d/' ~ item.profile_script ~ '.sh']
+            if (item.profile_script | default('') | length > 0) else [])
+           + (item.owned_files | default([])) }}

@@ -14,6 +14,17 @@
 #      /etc/profile.d script before the incoming version claims them.
 #   3. Install every desired version not yet installed.
 #
+# Step 4 is not part of the diff: it records the outcome - which versions
+# were installed, left alone, or removed, and the exact paths each one owns
+# on the VM - into the play-wide report accumulator. It has to run here,
+# while the diff sets are still in scope, because the finished filesystem
+# alone cannot distinguish a fresh install from an untouched one.
+#
+# Step 5 records the same versions from the acquisition side - source URL,
+# cached tarball, and whether that file and its extract target still exist -
+# for the artifact report. Unlike step 4 it PROBES rather than infers,
+# because on a converged run the acquisition code never executes at all.
+#
 # Manifests - not an /opt/<tool>-* directory glob - are the source of
 # truth for what is installed and what each version owns. A glob races
 # against anything an operator added by hand and can miss (or wrongly
@@ -72,6 +83,12 @@
 # ... 'in' ...` keeps items whose version is NOT in the other list.
 - name: Compute the stale and missing version sets
   ansible.builtin.set_fact:
+    # Reset the per-invocation acquisition log the install loop appends to
+    # (see _install-version.yml). jdk, dotnet_sdk and powershell all drive
+    # this role in one play and share these fact names, so without the
+    # reset the artifact report would attribute a previous tool's download
+    # to this one.
+    toolchain_host_push_transfers: []
     toolchain_host_push_stale: >-
       {{ toolchain_host_push_installed
          | rejectattr('version', 'in',
@@ -101,3 +118,16 @@
   loop_control:
     loop_var: toolchain_host_push_target
     label: "{{ toolchain_host_push_target.version }}"
+
+# 4. Report what the diff above actually did, into the play-wide
+#    accumulator the toolchain_report role renders per host. Kept in its
+#    own file so the three-part diff above stays the readable skeleton.
+- name: Record this tool's outcome in the toolchain report
+  ansible.builtin.include_tasks: _record-report.yml
+
+# 5. Probe and record where each desired version's ARTIFACT came from and
+#    whether it (and the directory it was unpacked into) is still on the
+#    VM. Separate from step 4 because it answers the other half of a build
+#    failure - not "what is installed" but "what was it installed from".
+- name: Record this tool's artifacts in the artifact report
+  ansible.builtin.include_tasks: _record-artifacts.yml

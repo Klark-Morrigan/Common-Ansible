@@ -52,8 +52,8 @@ Full field documentation lives in
 
 ## Reconcile flow
 
-A three-part diff of desired versus installed
-([`tasks/main.yml`](tasks/main.yml)):
+A three-part diff of desired versus installed, followed by two recording
+steps ([`tasks/main.yml`](tasks/main.yml)):
 
 1. **Read** the on-disk manifests for this tool into the
    `toolchain_host_push_installed` fact.
@@ -67,6 +67,23 @@ A three-part diff of desired versus installed
    download to the cache (stat-guarded), extract to
    `/opt/<name>-<version>/` (`--strip-components`), create the symlinks,
    write the profile script, then write the manifest **last**.
+4. **Record the outcome** for the per-host
+   [toolchain report](../toolchain_report/README.md)
+   ([`tasks/_record-report.yml`](tasks/_record-report.yml)) - which
+   versions were installed, left alone, or removed, and the paths each
+   owns. It runs here, while the diff sets are still in scope, because the
+   finished filesystem alone cannot tell a fresh install from an untouched
+   one, and a removed version's manifest is already gone.
+5. **Probe and record the artifacts** for the per-host
+   [artifact report](../artifact_report/README.md)
+   ([`tasks/_record-artifacts.yml`](tasks/_record-artifacts.yml)) - each
+   desired version's source URL, its cached tarball, and whether that file
+   and its extract target still exist. Unlike step 4 this **probes** rather
+   than infers, because on a converged run steps 2 and 3 never execute at
+   all - which is exactly the run during which an operator needs to know
+   where the artifact went.
+
+Steps 4 and 5 are not part of the diff and change no state on the VM.
 
 The install writes the manifest last and the uninstall removes it last,
 so a crash mid-operation is self-healing: the next reconcile either sees
@@ -83,6 +100,11 @@ flowchart TD
   READ[read manifests -> installed fact] --> DIFF{desired vs installed}
   DIFF -->|stale| RM[uninstall: rm symlinks, profile, dir, manifest]
   DIFF -->|missing| PULL
+  FACT --> REP[record: toolchain report entries]
+  RM --> REP
+  DIFF --> REP
+  REP --> PROBE[probe cache + install dir per desired version]
+  PROBE --> AREP[record: artifact report entries]
 ```
 
 ## Manifest and record model
@@ -178,6 +200,26 @@ builds fake tool tarballs and serves them on `127.0.0.1`):
 - **remove** - prepare installs `v1`, converge desires `[]`
   (uninstall-removed-versions). Verifies every `v1` artifact is gone and
   the installed fact is empty.
+
+Both report accumulators are facts, so they cannot be asserted from
+`verify.yml` (a separate `ansible-playbook` run with no fact cache) - the
+assertions live in each scenario's `converge.yml` instead:
+
+- **default** asserts the toolchain entry (status, install dir, symlink,
+  profile file) and the artifact entry against **real `stat` output** -
+  the only place the probe plumbing runs against real files rather than
+  seeded fixtures. Status and transfer are asserted as sets, because
+  molecule runs converge twice and the same version is legitimately
+  `installed` on the first pass and `present` on the second - which is
+  also what makes the two passes cover both branches of the manifest
+  re-read.
+- **reconcile** asserts a swap reports `removed` for `v1` *with the paths
+  it owned* (recoverable only from the stale set, since the manifest is
+  deleted before the report is built) and `installed` for `v2`, plus that
+  the artifact report describes only the desired version.
+- **remove** asserts the empty desired set still reports the removal while
+  claiming no artifact - the edge every loop in both recording files has
+  to survive without a guard.
 
 ## Rationale
 

@@ -1,0 +1,113 @@
+---
+# Verify the rendered report.
+#
+# The verifier is a separate ansible-playbook run, so converge's facts are
+# gone - this play re-includes the role to re-render from the same
+# inventory-seeded entry set, then asserts on artifact_report_lines. That
+# fact is the role's own output, so the assertions below check exactly the
+# text the operator sees rather than scraping the callback's stdout.
+
+- name: Verify - the artifact report renders provenance and residency
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Re-render the report
+      ansible.builtin.include_role:
+        name: artifact_report
+
+    # The header is the one-glance answer. The MISSING count must add both
+    # kinds of loss - the absent artifact and the absent unpacked dir -
+    # because either one breaks a build.
+    - name: Assert the header counts transfers and losses
+      ansible.builtin.assert:
+        that:
+          - artifact_report_lines[0] is search('Artifact report for instance')
+          - artifact_report_lines[0] is search('2 downloaded')
+          - artifact_report_lines[0] is search('1 reused from cache')
+          - artifact_report_lines[0] is search('2 not needed')
+          - artifact_report_lines[0] is search('2 MISSING')
+        fail_msg: >-
+          header line did not summarise the seeded entries:
+          {{ artifact_report_lines[0] | default('<no lines>') }}
+
+    - name: Assert both section headings are present
+      ansible.builtin.assert:
+        that:
+          - artifact_report_lines | select('search', '^section 1 - host-pushed')
+            | list | length == 1
+          - artifact_report_lines | select('search', '^section 2 - vm-downloaded')
+            | list | length == 1
+        fail_msg: "section headings missing or duplicated: {{ artifact_report_lines }}"
+
+    # Tool, version and this run's transfer state on one headline row.
+    - name: Assert each entry renders its tool, version and transfer state
+      ansible.builtin.assert:
+        that:
+          - "'  faketool 1.0.0  [transfer: none]' in artifact_report_lines"
+          - "'  fakesdk 9.9.900  [transfer: downloaded]' in artifact_report_lines"
+          - "'  fakegone 7.6.4  [transfer: reused-cache]' in artifact_report_lines"
+          - "'  fakelib 0.3.0  [transfer: downloaded]' in artifact_report_lines"
+        fail_msg: "an entry headline did not render: {{ artifact_report_lines }}"
+
+    # Provenance: every entry names where it came from, retained or not.
+    - name: Assert every entry renders its source URL
+      ansible.builtin.assert:
+        that:
+          - artifact_report_lines
+            | select('search', '^      source    ') | list | length == 5
+          - >-
+            '      source    http://127.0.0.1:18811/faketool-1.0.0.tar.gz'
+            in artifact_report_lines
+          - >-
+            '      source    https://github.com/bats-core/fakelib/archive/refs/tags/v0.3.0.tar.gz'
+            in artifact_report_lines
+        fail_msg: "a source line did not render: {{ artifact_report_lines }}"
+
+    # Residency of a retained artifact: path, size, and the dated mtime
+    # when one was probed. filesizeformat and strftime are what turn raw
+    # stat output into something an operator can compare at a glance.
+    - name: Assert a resident artifact renders its path, size and mtime
+      ansible.builtin.assert:
+        that:
+          - >-
+            '      artifact  /var/cache/common-ansible/toolchains/faketool-1.0.0.tar.gz'
+            in artifact_report_lines
+          - artifact_report_lines
+            | select('search', '^                present, 195.3 MB, modified \\d{4}-')
+            | list | length == 1
+          - "'                present, 229.0 MB' in artifact_report_lines"
+          - "'      unpacked  /opt/faketool-1.0.0  present' in artifact_report_lines"
+        fail_msg: "residency did not render: {{ artifact_report_lines }}"
+
+    # The headline diagnostic. Both losses must shout in uppercase, and
+    # nothing that is actually present may.
+    - name: Assert a lost artifact and a lost install directory both read MISSING
+      ansible.builtin.assert:
+        that:
+          - "'                MISSING' in artifact_report_lines"
+          - "'      unpacked  /opt/fakegone-7.6.4  MISSING' in artifact_report_lines"
+          - artifact_report_lines | select('search', 'MISSING') | list | length == 3
+        fail_msg: "MISSING did not render as expected: {{ artifact_report_lines }}"
+
+    # A mechanism that keeps nothing must say why, so an empty artifact
+    # path reads as "by design" rather than as "lost".
+    - name: Assert not-retained artifacts explain themselves
+      ansible.builtin.assert:
+        that:
+          - artifact_report_lines
+            | select('search', '^      artifact  not retained - ') | list | length == 2
+          - artifact_report_lines
+            | select('search', 'staged then wiped') | list | length == 1
+          - artifact_report_lines
+            | select('search', 'streamed by remote_src unarchive') | list | length == 1
+        fail_msg: >-
+          a not-retained entry did not explain itself:
+          {{ artifact_report_lines }}
+
+    # A rendering bug that leaves stray blank lines (the trim_blocks /
+    # lstrip_blocks trap the template guards against) would show up here.
+    - name: Assert no blank or leading-whitespace-only lines were emitted
+      ansible.builtin.assert:
+        that:
+          - artifact_report_lines | select('match', '^\\s*$') | list | length == 0
+        fail_msg: "the report emitted blank lines: {{ artifact_report_lines }}"

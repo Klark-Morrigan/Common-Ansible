@@ -1,0 +1,17 @@
+---
+# Converge - render the report from the entry set seeded in molecule.yml's
+# inventory host_vars. The role sets artifact_report_lines and prints it;
+# nothing is installed, so `molecule idempotence` proves the whole role is
+# side-effect free (changed: 0 on the second run, since set_fact and debug
+# never report changed).
+#
+# include_role (not import_role) defers resolution to runtime so the
+# molecule.yml ANSIBLE_ROLES_PATH override is honoured.
+
+- name: Converge - render the artifact report
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: artifact_report

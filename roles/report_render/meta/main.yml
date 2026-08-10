@@ -1,0 +1,26 @@
+---
+# Role metadata. The galaxy_info block exists to satisfy ansible-lint's
+# role-name / meta-no-info rules, not to publish to Galaxy (this repo is
+# consumed via a sibling checkout - see the repo README).
+
+galaxy_info:
+  role_name: report_render
+  author: Common-Ansible
+  description: >-
+    Shared tail for the operator-facing report roles: split a rendered
+    report into lines, leave them in a caller-named fact, and print them.
+    Owns the callback-encoding and Jinja-escape mechanics so each report
+    role states them once, not once per report.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+  galaxy_tags:
+    - system
+    - toolchain
+
+# Standalone: the caller passes text in and names the fact to leave it in.
+# Nothing here depends on which report is being rendered.
+dependencies: []

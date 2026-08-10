@@ -1,0 +1,141 @@
+---
+# Molecule scenario for the artifact_report role - render a representative
+# entry set and assert the resulting text.
+#
+# The entry set is seeded through inventory host_vars rather than in
+# converge.yml on purpose: molecule's ansible verifier runs a SEPARATE
+# ansible-playbook invocation, so facts set during converge are gone by
+# verify time. An inventory var is visible to both plays, which lets
+# verify.yml re-render from the same single source and assert on it.
+#
+# It covers, in one host: both sections, all three transfer states, a
+# retained artifact with size and mtime, a retained artifact that is
+# MISSING, an unpacked directory that is MISSING, and both not-retained
+# mechanisms (wiped staging dir, streamed tarball).
+#
+# Single Ubuntu 24.04 container, Docker driver, ansible verifier. The role
+# only templates and sets a fact - it touches nothing on the target - but
+# the scenario still runs against the shared base image so it matches every
+# other scenario in the repo rather than introducing a delegated-driver
+# special case.
+#
+# Image: reuses the toolchain_host_push base (python3 + sudo on
+# ubuntu:24.04). No custom Dockerfile - build it via the command in
+# Tests/molecule/toolchain_host_push/Dockerfile.
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: instance
+    image: common-ansible/toolchain-host-push-base:24.04
+    pre_build_image: true
+    command: /bin/sleep infinity
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  env:
+    # ANSIBLE_ROLES_PATH (env) wins over ansible.cfg's roles_path and
+    # propagates across every molecule phase. MOLECULE_PROJECT_DIRECTORY
+    # is the scenario dir; three levels up is the repo root, then roles/.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../../roles"
+  config_options:
+    defaults:
+      stdout_callback: yaml
+      callbacks_enabled: profile_tasks
+  inventory:
+    host_vars:
+      instance:
+        ansible_user: root
+        artifact_report_entries:
+          # Steady state: nothing to do this run, artifact and extract
+          # target both still resident. mtime is a fixed epoch so the
+          # rendered date is deterministic.
+          - tool: faketool
+            version: "1.0.0"
+            section: host-push
+            source: http://127.0.0.1:18811/faketool-1.0.0.tar.gz
+            transfer: none
+            artifact:
+              path: /var/cache/common-ansible/toolchains/faketool-1.0.0.tar.gz
+              present: true
+              size: 195281920
+              mtime: 1781000000
+              note: ""
+            unpacked:
+              dir: /opt/faketool-1.0.0
+              present: true
+          # Bytes moved this run. No mtime, to prove the size renders
+          # without the trailing "modified ..." clause.
+          - tool: fakesdk
+            version: "9.9.900"
+            section: host-push
+            source: http://127.0.0.1:18811/fakesdk-9.9.900.tar.gz
+            transfer: downloaded
+            artifact:
+              path: /var/cache/common-ansible/toolchains/fakesdk-9.9.900.tar.gz
+              present: true
+              size: 229038080
+              mtime: 0
+              note: ""
+            unpacked:
+              dir: /opt/fakesdk-9.9.900
+              present: true
+          # The diagnostic case this report exists for: the install
+          # directory is gone, so anything symlinked into it dangles. The
+          # artifact is gone too, so a reinstall would need the network.
+          - tool: fakegone
+            version: "7.6.4"
+            section: host-push
+            source: http://127.0.0.1:18811/fakegone-7.6.4.tar.gz
+            transfer: reused-cache
+            artifact:
+              path: /var/cache/common-ansible/toolchains/fakegone-7.6.4.tar.gz
+              present: false
+              size: 0
+              mtime: 0
+              note: ""
+            unpacked:
+              dir: /opt/fakegone-7.6.4
+              present: false
+          # Not retained by design - staged then wiped.
+          - tool: faketool-globaltool
+            version: "5.4.5"
+            section: host-push
+            source: http://127.0.0.1:18811/dotnet-tool-faketool-globaltool-5.4.5.nupkg
+            transfer: none
+            artifact:
+              path: ""
+              present: false
+              size: 0
+              mtime: 0
+              note: staged then wiped once the driver has installed from it
+            unpacked:
+              dir: /usr/local/share/dotnet/tools/.store/faketool-globaltool/5.4.5
+              present: true
+          # Not retained by design - streamed straight into the target dir.
+          - tool: fakelib
+            version: "0.3.0"
+            section: vm-download
+            source: https://github.com/bats-core/fakelib/archive/refs/tags/v0.3.0.tar.gz
+            transfer: downloaded
+            artifact:
+              path: ""
+              present: false
+              size: 0
+              mtime: 0
+              note: streamed by remote_src unarchive, so it never lands as a file
+            unpacked:
+              dir: /usr/lib/fakelib
+              present: true
+
+verifier:
+  name: ansible

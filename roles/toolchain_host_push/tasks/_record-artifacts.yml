@@ -1,0 +1,100 @@
+---
+# Append this tool's artifacts to the play-wide artifact report accumulator
+# (artifact_report_entries), which the artifact_report role renders once per
+# host.
+#
+# Where _record-report.yml describes what is INSTALLED, this file describes
+# what it was installed FROM: the tarball's source URL, its path in the VM
+# cache, and whether both that file and the directory it was extracted into
+# still exist.
+#
+# Residency is stated by probing, not by inference. On a converged run
+# _install-version.yml never executes, so nothing here can be derived from
+# what the run did - and that is exactly the run during which an operator
+# needs to know where the artifact went. Both stats therefore cover the
+# whole DESIRED set, unconditionally.
+#
+# Scope is the desired set, so a version this run REMOVED is absent from
+# the artifact report even though uninstall deliberately leaves its cached
+# tarball behind. The manifest does not record an archive name, so an
+# orphaned tarball cannot be attributed back to the tool that fetched it;
+# claiming otherwise would need a manifest schema change. The toolchain
+# report still shows the removal and the paths it tore down.
+
+# get_checksum is off: these are 200 MB toolchain tarballs and hashing one
+# per run would dominate the report's cost. Size and mtime are the cheap
+# proxy for "is this the artifact I think it is" - a truncated download
+# shows up as a wrong size, and mtime dates it against the run that broke.
+- name: Stat each desired version's cached artifact
+  ansible.builtin.stat:
+    path: "{{ toolchain_host_push_cache_dir }}/{{ item.archive }}"
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  become: true
+  loop: "{{ toolchain_host_push_versions }}"
+  loop_control:
+    label: "{{ item.archive }}"
+  register: toolchain_host_push_artifact_stat
+
+# The extract target. A version the toolchain report calls installed whose
+# install dir is MISSING here is the headline failure this report exists to
+# surface: the manifest claims paths that are gone, so every symlink into
+# them dangles and the build fails with "no such file".
+- name: Stat each desired version's unpacked install directory
+  ansible.builtin.stat:
+    path: >-
+      {{ toolchain_host_push_install_base }}/{{
+      toolchain_host_push_name }}-{{ item.version }}
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  become: true
+  loop: "{{ toolchain_host_push_versions }}"
+  loop_control:
+    label: "{{ item.version }}"
+  register: toolchain_host_push_unpacked_stat
+
+# Both stats loop the same list in the same order, so the loop index pairs
+# them without a zip or a lookup.
+- name: Append this tool's artifacts to the artifact report
+  ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix]
+    artifact_report_entries: >-
+      {{ (artifact_report_entries | default([])) + [entry] }}
+  loop: "{{ toolchain_host_push_versions }}"
+  loop_control:
+    label: "{{ item.archive }}"
+    index_var: toolchain_host_push_artifact_index
+  vars:
+    artifact_stat: >-
+      {{ toolchain_host_push_artifact_stat.results[
+         toolchain_host_push_artifact_index].stat }}
+    unpacked_stat: >-
+      {{ toolchain_host_push_unpacked_stat.results[
+         toolchain_host_push_artifact_index].stat }}
+    entry:
+      tool: "{{ toolchain_host_push_name }}"
+      version: "{{ item.version }}"
+      section: host-push
+      source: "{{ host_file_server_base_url }}/{{ item.archive }}"
+      # Absent from the acquisition log means the install loop never ran
+      # for this version - it was already installed, so nothing was fetched.
+      transfer: >-
+        {{ toolchain_host_push_transfers | default([])
+           | selectattr('version', 'equalto', item.version)
+           | map(attribute='transfer') | list | first | default('none') }}
+      # Casts are explicit: the report's counters use truthiness tests
+      # (rejectattr) and its formatting uses filesizeformat / strftime, and
+      # a stat value arriving as the STRING "False" or "0" would be truthy
+      # and unformattable respectively.
+      artifact:
+        path: "{{ toolchain_host_push_cache_dir }}/{{ item.archive }}"
+        present: "{{ artifact_stat.exists | bool }}"
+        size: "{{ artifact_stat.size | default(0) | int }}"
+        mtime: "{{ artifact_stat.mtime | default(0) | int }}"
+        note: ""
+      unpacked:
+        dir: >-
+          {{ toolchain_host_push_install_base }}/{{
+          toolchain_host_push_name }}-{{ item.version }}
+        present: "{{ unpacked_stat.exists | bool }}"

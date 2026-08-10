@@ -1,0 +1,50 @@
+---
+# Defaults and the input contract for the report_render role.
+#
+# The shared tail of every operator-facing report in this repo. A report
+# role renders its own text (it owns the template and the entry contract);
+# this role owns the three non-obvious mechanics of getting that text in
+# front of an operator, so they are stated and fixed once instead of once
+# per report:
+#
+#   1. splitlines(), not `| split('\n')`. The backslash-n in a Jinja
+#      string literal does not reach the filter as a newline through
+#      Ansible's templating, so the filter form silently returns the whole
+#      report as a single element - which renders as one unreadable row.
+#      splitlines() needs no escape at all.
+#   2. A LIST of lines, not one newline-joined string. The default
+#      callback JSON-encodes a debug msg, so a multi-line string renders
+#      as an unreadable "line1\nline2\n..." blob on a single row; a list
+#      prints one element per row.
+#   3. trim before splitting. A template ends with a newline, which would
+#      otherwise become a trailing empty line.
+#
+# The rendered text is also left behind as a fact so a test - or any
+# consumer wanting the report as data rather than as stdout - asserts on
+# the same value the operator saw, instead of scraping the callback.
+#
+# Required inputs (NO default - documented here rather than defaulted so
+# an omission fails loudly):
+#
+#   report_render_text   The fully rendered report, as one string. The
+#                        CALLER performs its own `lookup('template', ...)`
+#                        and passes the result, so the template resolves
+#                        against the calling role's templates/ directory
+#                        with no search-path ambiguity - this role never
+#                        needs to know a template name.
+#   report_render_fact   Name of the fact to leave the split lines in
+#                        (e.g. "toolchain_report_lines"). The caller owns
+#                        this name because the caller owns the contract
+#                        its tests and consumers read.
+#   report_render_label  Trailing phrase for the printing task's name,
+#                        rendered as "Report the <label>" - so a play
+#                        running several reports is readable in the task
+#                        list rather than showing the same generic name.
+#                        It carries the WHOLE phrase (e.g. "reconciled
+#                        toolchains for this host") rather than just a
+#                        noun, because ansible-lint's `name[template]`
+#                        rule requires the interpolation to sit at the end
+#                        of the name.
+report_render_text: ""
+report_render_fact: ""
+report_render_label: report

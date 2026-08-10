@@ -1,0 +1,60 @@
+---
+# Defaults and the input contract for the toolchain_report role.
+#
+# This role installs nothing. It is the terminal consumer of the play-wide
+# `toolchain_report_entries` accumulator that every toolchain role appends
+# to as it reconciles, and it renders one block per host answering the
+# question the per-task PLAY output cannot: what is on this VM now, where
+# does it live, and did THIS run put it there.
+#
+# Why an accumulator rather than a terminal scan: status is only knowable
+# at the moment each role diffs desired against installed. A scan of the
+# finished filesystem sees the end state but cannot tell a version this run
+# installed from one that was already there, and cannot see a removed
+# version at all - its manifest is gone by then.
+#
+# Why paths come from the manifests rather than the desired-state entry: a
+# host-push tool using `symlink_bin_dir` (the JDK's ~50 launchers) only
+# learns its full symlink set at install time. The manifest is where that
+# lands, so it is also the only accurate source for the report.
+#
+# The accumulator name carries no role prefix on purpose: it is a
+# cross-role contract, like host_file_server_base_url, written by six roles
+# and read by this one. Prefixing it with any single role's name would
+# misdescribe its ownership. That is why every producing role's append task
+# carries `# noqa: var-naming[no-role-prefix]` - the rule assumes a var set
+# inside a role belongs to that role, which is exactly what this one does
+# not do. The suppression is documented here, once, rather than repeated at
+# each of the six sites.
+#
+# toolchain_report_entries - appended by the producing roles, never set by
+# an operator. Each entry:
+#
+#   tool         (required) Display identity ("jdk", "dotnet", "shellcheck",
+#                           "bats-support", "docker"). Not unique on its
+#                           own - the tool/version pair is.
+#   version      (required) Version string. "" when the mechanism carries
+#                           no meaningful version.
+#   section      (required) Acquisition section - host-push | vm-download |
+#                           base-image. Groups the report the same way the
+#                           three-section taxonomy groups the roles.
+#   status       (required) installed (this run placed it) | present
+#                           (already converged, this run touched nothing) |
+#                           removed (this run tore it down).
+#   install_dir  (optional) Primary directory the entry owns on the VM. ""
+#                           when the mechanism places no directory of its
+#                           own - apt packages and the Docker engine are
+#                           dpkg-managed, so their paths belong to the
+#                           package manager, not to this stack.
+#   symlinks     (optional) List of {path, target} placed in /usr/local/bin.
+#                           Rendered one line each, in full: an operator
+#                           debugging "which java am I running" needs the
+#                           exact link, not a count.
+#   files        (optional) Any other absolute path the entry owns - an
+#                           /etc/profile.d script, an owned config file, a
+#                           version marker.
+#
+# An entry with no install_dir, symlinks, or files renders as
+# package-manager managed rather than as an empty block, so "we do not
+# track these paths" reads differently from "this placed nothing".
+toolchain_report_entries: []

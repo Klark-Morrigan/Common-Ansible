@@ -1,0 +1,68 @@
+---
+# Append this role's artifacts to the play-wide artifact report accumulator
+# (artifact_report_entries). The host-push counterpart carries the full
+# rationale; two things differ here.
+#
+# First, nothing is retained. _install-tool.yml stages the .nupkg into a
+# per-tool directory, points a pinned NuGet.Config at it, runs the driver,
+# and then WIPES that directory - so unlike a tarball toolchain there is no
+# cached artifact to stat. The entry says so explicitly rather than
+# reporting an empty path, which would read as "lost" instead of "by
+# design".
+#
+# Second, transfer needs no acquisition log. The install has no cache
+# short-circuit - it downloads the package every time it runs - so being in
+# the `missing` set IS the record that bytes moved.
+
+# The driver-managed store slot, which is what the tool actually runs out
+# of. MISSING here against a tool the toolchain report calls installed
+# means the manifest's shims point into a directory that is gone.
+- name: Stat each desired tool's store directory
+  ansible.builtin.stat:
+    path: "{{ dotnet_tools_root }}/.store/{{ item.id }}/{{ item.version }}"
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  become: true
+  loop: "{{ dotnet_tools_desired | default([]) }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: dotnet_tools_store_stat
+
+- name: Append the .NET global tool artifacts to the artifact report
+  ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix]
+    artifact_report_entries: >-
+      {{ (artifact_report_entries | default([])) + [entry] }}
+  loop: "{{ dotnet_tools_desired | default([]) }}"
+  loop_control:
+    label: "{{ item.key }}"
+    index_var: dotnet_tools_artifact_index
+  vars:
+    store_stat: >-
+      {{ dotnet_tools_store_stat.results[dotnet_tools_artifact_index].stat }}
+    entry:
+      tool: "{{ item.id }}"
+      version: "{{ item.version }}"
+      section: host-push
+      source: >-
+        {{ host_file_server_base_url }}/dotnet-tool-{{ item.id }}-{{
+        item.version }}.nupkg
+      transfer: >-
+        {{ 'downloaded'
+           if item.key in (dotnet_tools_missing | map(attribute='key') | list)
+           else 'none' }}
+      # An empty path is what marks a mechanism that retains nothing; the
+      # note is what stops that reading as "lost" instead of "by design".
+      artifact:
+        path: ""
+        present: false
+        size: 0
+        mtime: 0
+        note: >-
+          the .nupkg is staged under {{ dotnet_tools_staging_base }}/<key>
+          and wiped once the driver has installed from it
+      unpacked:
+        dir: "{{ dotnet_tools_root }}/.store/{{ item.id }}/{{ item.version }}"
+        # Cast explicitly - the report's counters test truthiness, and the
+        # STRING "False" is truthy.
+        present: "{{ store_stat.exists | bool }}"

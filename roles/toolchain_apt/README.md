@@ -44,15 +44,37 @@ Full field documentation lives in
    the offending entry, rather than as an opaque apt error later).
 2. Composes the apt name specifiers - `name` when unpinned,
    `name=version` when pinned.
-3. Refreshes the apt cache, throttled by `toolchain_apt_cache_valid_time`.
-4. Installs the whole set in one apt transaction at `state: present` with
+3. Snapshots each package's currently installed version with
+   `dpkg-query`. This is the only moment per-package status is knowable:
+   apt installs the whole set in one transaction and reports a single
+   `changed` for it, which cannot say *which* packages moved.
+4. Refreshes the apt cache, throttled by `toolchain_apt_cache_valid_time`.
+5. Installs the whole set in one apt transaction at `state: present` with
    `allow_downgrade` so an exact pin always wins.
+6. Runs the same `dpkg-query` probe again, for the authoritative installed
+   version - the only way to name a version at all for an unpinned entry,
+   and proof the pin took for a pinned one.
+7. Appends one entry per package to the per-host
+   [toolchain report](../toolchain_report/README.md): `present` when the
+   before-snapshot already matched the desired pin, `installed` otherwise.
+   No paths are reported - dpkg, not this role, owns that record, and the
+   report renders such an entry as dpkg-managed rather than as an empty
+   block.
+
+The probe command is defined once in [`vars/main.yml`](vars/main.yml) and
+referenced by both call sites: the whole point is comparing the *same*
+query across the install, so a copy-pasted second version could drift
+silently. It lives in `vars/` rather than `defaults/` because it is
+implementation detail a caller must not override.
 
 ```mermaid
 flowchart LR
   PKGS[toolchain_apt_packages] --> SPEC[compose name / name=version]
-  SPEC --> CACHE[apt cache refresh - throttled]
+  SPEC --> BEFORE[dpkg-query snapshot]
+  BEFORE --> CACHE[apt cache refresh - throttled]
   CACHE --> INST[apt install pinned set]
+  INST --> AFTER[dpkg-query re-read]
+  AFTER --> REP[report entry: present or installed]
   INST --> BIN[/tool on PATH at the pinned version/]
 ```
 
@@ -132,6 +154,17 @@ container pulling the package from the Ubuntu archive:
   idempotent shape for `bats=1.10.0-1`, and additionally drops a trivial
   `.bats` file and runs it green - proving the installed runner can execute
   a test, not merely that the binary resolves on PATH.
+
+The report accumulator is a fact, so it cannot be asserted from
+`verify.yml` (a separate `ansible-playbook` run with no fact cache) - the
+**default** scenario's `converge.yml` asserts it instead. That is the only
+coverage of the status logic, which is the most intricate part of the
+role: the before-snapshot is matched against a regex built per entry from
+the package name and, when pinned, the exact version, so a broken pattern
+would silently report every package as `installed` forever. Molecule runs
+converge twice and the two passes exercise both branches - the first finds
+shellcheck absent (`installed`), the second finds it at the exact pin
+(`present`), which a second assertion pins down explicitly.
 
 Both scenarios reuse the `toolchain_host_push` base image (python3 + sudo
 on ubuntu:24.04) - apt is the whole mechanism, so no localhost fixture is

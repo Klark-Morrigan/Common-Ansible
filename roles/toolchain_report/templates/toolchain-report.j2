@@ -1,0 +1,54 @@
+{#
+  Render toolchain_report_entries for one host as plain text lines.
+
+  This lives in a template rather than an inline Jinja expression because
+  the iteration is nested (entry -> its symlinks -> its files); as a
+  one-line filter chain in a set_fact it would be unreadable, and there is
+  no filter shape that flattens it cleanly.
+
+  Block tags sit at column 0 on purpose. Ansible's Jinja environment sets
+  trim_blocks (the newline after a tag is dropped) but NOT lstrip_blocks,
+  so any indentation before a block tag would leak into the output as
+  stray leading spaces.
+
+  Plain ASCII, no colour: this text is emitted through `debug`, whose
+  result the default callback JSON-encodes - an ANSI escape survives that
+  encoding as its literal backslash form instead of colouring anything.
+#}
+{% set entries = toolchain_report_entries | default([]) %}
+{% set sections = [
+     ('host-push',
+      'section 1 - host-pushed (staged on the controller, pulled from the file server)'),
+     ('vm-download',
+      'section 2 - vm-downloaded (the VM fetches these itself)'),
+     ('base-image',
+      'section 3 - base-image (daemon installed from a vendor repo)')
+   ] %}
+{% set installed = entries | selectattr('status', 'equalto', 'installed') | list %}
+{% set present = entries | selectattr('status', 'equalto', 'present') | list %}
+{% set removed = entries | selectattr('status', 'equalto', 'removed') | list %}
+Toolchain report for {{ inventory_hostname }} -- {{ installed | length }} installed, {{ present | length }} present, {{ removed | length }} removed
+{% if not entries %}
+  (no toolchain role contributed an entry - nothing was reconciled here)
+{% endif %}
+{% for key, heading in sections %}
+{% set rows = entries | selectattr('section', 'equalto', key) | list %}
+{% if rows %}
+{{ heading }}
+{% for entry in rows %}
+  {{ "%-9s" | format(entry.status) }} {{ entry.tool }}{{ ' ' ~ entry.version if entry.version | default('') else '' }}
+{% if entry.install_dir | default('') %}
+      dir   {{ entry.install_dir }}
+{% endif %}
+{% for link in entry.symlinks | default([]) %}
+      link  {{ link.path }} -> {{ link.target }}
+{% endfor %}
+{% for path in entry.files | default([]) %}
+      file  {{ path }}
+{% endfor %}
+{% if not (entry.install_dir | default('') or entry.symlinks | default([]) or entry.files | default([])) %}
+      (dpkg-managed - the package manager owns these paths)
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}

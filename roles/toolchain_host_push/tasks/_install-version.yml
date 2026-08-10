@@ -52,6 +52,21 @@
   become: true
   when: not toolchain_host_push_cache_stat.stat.exists
 
+# Log how this version's artifact was acquired, for the artifact report.
+# This is the only place the distinction survives: the stat result above is
+# overwritten by the next version's iteration, and after the run the cache
+# file looks identical whether it was downloaded now or months ago.
+- name: Log how this version's artifact was acquired
+  ansible.builtin.set_fact:
+    toolchain_host_push_transfers: >-
+      {{ (toolchain_host_push_transfers | default([])) + [record] }}
+  vars:
+    record:
+      version: "{{ toolchain_host_push_target.version }}"
+      transfer: >-
+        {{ 'reused-cache' if toolchain_host_push_cache_stat.stat.exists
+           else 'downloaded' }}
+
 - name: Ensure the versioned install directory exists
   ansible.builtin.file:
     path: "{{ toolchain_host_push_install_dir }}"

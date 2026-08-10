@@ -31,6 +31,9 @@ was extended by the feature step that earned it.
     - [bats-libraries toolchain pattern (toolchain_bats_libs)](#bats-libraries-toolchain-pattern-toolchain_bats_libs)
   - [Section 3 - base-image daemons](#section-3---base-image-daemons)
     - [Docker daemon (docker)](#docker-daemon-docker)
+  - [Cross-section - the reconciliation report (toolchain_report)](#cross-section---the-reconciliation-report-toolchain_report)
+  - [Cross-section - the artifact report (artifact_report)](#cross-section---the-artifact-report-artifact_report)
+  - [Shared report plumbing (report_render)](#shared-report-plumbing-report_render)
 - [Tests and lint](#tests-and-lint)
   - [Ansible lint gate (ci-ansible.yml)](#ansible-lint-gate-ci-ansibleyml)
 - [Consuming the substrate](#consuming-the-substrate)
@@ -666,6 +669,86 @@ The molecule scenario is genuine docker-in-docker - a privileged,
 systemd-init container so the inner daemon really starts and `verify` can
 run `docker ps`. Full var contract, the security note, and the
 docker-in-docker caveat are in the [role README](roles/docker/README.md).
+
+### Cross-section - the reconciliation report (toolchain_report)
+
+[`roles/toolchain_report`](roles/toolchain_report/) installs nothing. It
+renders one plain-text block per host at the end of a provisioning play,
+naming every tool the roles above reconciled: what this run **installed**,
+what was already **present**, what it **removed**, and the exact paths each
+one owns on the VM - install directory, every `/usr/local/bin` symlink in
+full, the `/etc/profile.d` script, owned config files, version markers.
+
+It exists because Ansible's per-task output answers "did this task change
+something", not "what is on this VM and where". On a converged run the
+distinction is stark: every reconcile short-circuits on its manifest, the
+install tasks print `skipping`, and the paths never appear at all even
+though the VM records them.
+
+The mechanism is an accumulator, not a terminal filesystem scan. Each role
+appends its outcome to the play-wide `toolchain_report_entries` list at the
+moment it diffs desired against installed - the only moment status is
+knowable, since the finished filesystem cannot distinguish a fresh install
+from an untouched one, and a removed version's manifest is already gone.
+Paths come from the manifests for the same reason: a host-push tool using
+`symlink_bin_dir` (the JDK's ~50 launchers) only learns its full symlink
+set at install time.
+
+All six producing roles - `toolchain_host_push` (so `jdk`, `dotnet_sdk` and
+`powershell`), `dotnet_tools`, `toolchain_apt`, `toolchain_bats_libs` and
+`docker` - contribute. Consumers include it **last** in the play, tagged
+`always` so a targeted run still ends with a scoped report. Sample output,
+the entry contract, and the per-role status sources are in the
+[role README](roles/toolchain_report/README.md).
+
+### Cross-section - the artifact report (artifact_report)
+
+[`roles/artifact_report`](roles/artifact_report/) is the acquisition-side
+companion, and also installs nothing. Where `toolchain_report` says what is
+installed, this says what it was installed **from**: each artifact's source
+URL, its path in the VM cache, its probed size and mtime, and the directory
+it was unpacked into.
+
+It exists for the failure that happens *after* provisioning succeeds - a
+build breaking on the VM. That is diagnosed by walking backwards from the
+failing binary to the artifact it came out of, and none of that chain is
+normally visible: the download is skipped on a cache hit, and on a fully
+converged run the acquisition code never executes at all, so the run that
+most needs the answer prints the least.
+
+The key difference from its sibling is that residency is **probed, not
+inferred**. Every producing role stats the artifact and its unpacked
+directory for each desired version whether or not this run touched them, so
+the report describes the VM as it is rather than as this run left it. That
+is what makes the two reports diagnostic as a pair: `toolchain_report`
+saying `present` while `artifact_report` prints `MISSING` for the same
+install directory is a complete diagnosis - the manifest claims paths that
+are gone, so every symlink into them dangles.
+
+Three roles contribute: `toolchain_host_push` (tarballs, retained in
+`/var/cache/common-ansible/toolchains`), `dotnet_tools` (`.nupkg`, staged
+then wiped) and `toolchain_bats_libs` (tag tarball, streamed and never
+landed). apt packages and the Docker engine are absent by design - dpkg
+owns its own download cache. Sample output, the entry contract, and a
+symptom-to-diagnosis table are in the
+[role README](roles/artifact_report/README.md).
+
+### Shared report plumbing (report_render)
+
+[`roles/report_render`](roles/report_render/) is the tail both report roles
+delegate to. A report role owns its template and its entry contract; this
+one owns the three non-obvious mechanics of getting rendered text in front
+of an operator - `splitlines()` rather than a `split('\n')` filter (the
+escape does not survive Ansible's templating), a list of lines rather than
+one string (the default callback JSON-encodes a `debug` msg, so a
+multi-line string prints as one unreadable row), and `trim` before
+splitting. Stated once here rather than once per report.
+
+It also leaves the lines in a caller-named fact, which is what lets the
+molecule scenarios assert on exactly the text the operator saw instead of
+scraping the callback. The caller passes rendered **text**, not a template
+name, so this role never resolves a path - see the
+[role README](roles/report_render/README.md) for why.
 
 ## Tests and lint
 
