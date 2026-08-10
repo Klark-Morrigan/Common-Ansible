@@ -1,12 +1,13 @@
 ---
 # Molecule scenario for the vm_files role - single form transport.
 #
-# The counterpart to the `schema` scenario: that one asserts what the role
-# refuses, this one asserts what it does with what it accepts. The default
-# sequence's `idempotence` phase is the point of running the transport
-# here rather than folding it into the schema converge - a copy that
-# re-reports `changed` on an already-converged VM is the failure this
-# scenario exists to catch.
+# One of three: `schema` asserts what the role refuses, `bulk` asserts
+# which files a pattern names, and this one asserts what the transport
+# does with an entry that already names one file. The default sequence's
+# `idempotence` phase is the point of running the transport here rather
+# than folding it into the schema converge - a copy that re-reports
+# `changed` on an already-converged VM is the failure this scenario exists
+# to catch.
 #
 # Single Ubuntu 24.04 container, Docker driver, ansible verifier. The role
 # only writes files, so a non-systemd sleep-infinity container suffices.

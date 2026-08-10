@@ -212,7 +212,10 @@ would prove nothing about what a pattern leaves behind:
 | Flatten, recursive | Basenames from two different depths land side by side |
 | Preserve, recursive | The same match set mirrors its sub-tree instead, so the flag is the only difference between the two targets |
 | Wildcard mid-pattern | The anchor is the component boundary: `variants/v*/config.ini` lands `v1/...` and `v2/...`, not `1/...` and `2/...` |
+| `?` in a pattern | Exactly one character - `?.json` leaves behind what `*.json` takes |
+| Dot-prefixed source | Matched like any other name, which is what the PowerShell engine does on a Windows volume |
 | Files and directories matched | The directories are dropped, so exactly the files land |
+| A single form entry among them | Both forms feed one accumulator, so resolving a bulk entry must add to it rather than replace it |
 | Pattern matching nothing | Refused, naming the pattern |
 | Pattern matching only directories | Refused the same way, rather than copying a directory or succeeding empty |
 | Two matches, one VM path | Refused, naming the contested path and pointing at `preserveRelativePath` |

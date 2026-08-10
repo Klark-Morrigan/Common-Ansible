@@ -1,11 +1,13 @@
 ---
-# Converge - resolve and transport the declared bulk form entries.
+# Converge - resolve and transport the declared entries.
 #
-# All five entries are declared in one include rather than one per case,
-# because that is how an operator's config carries them and because it
-# proves the entries resolve independently: they share a source tree and
-# two of them share a pattern, so an implementation that let one entry's
-# resolution leak into the next would land files under the wrong target.
+# Every entry is declared in one include rather than one per case, because
+# that is how an operator's config carries them and because it proves the
+# entries resolve independently: they share a source tree and two of them
+# share a pattern, so an implementation that let one entry's resolution
+# leak into the next would land files under the wrong target. The single
+# form entry among them is there for the same reason - both forms feed one
+# accumulator.
 #
 # Also what `molecule idempotence` re-runs. Resolution happens on every
 # pass, so a glob whose expansion or ordering was not stable would surface
@@ -14,7 +16,7 @@
 # include_role (not import_role) defers resolution to runtime so the
 # molecule.yml ANSIBLE_ROLES_PATH override is honoured.
 
-- name: Converge - transport the declared bulk form file entries
+- name: Converge - transport the declared file entries
   hosts: all
   gather_facts: false
   tasks:

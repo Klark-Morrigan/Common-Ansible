@@ -74,6 +74,14 @@ provisioner:
           - a.json
           - b.json
           - c.txt
+          # Two characters where the others have one, so '?' - which
+          # matches exactly one - has something to exclude that '*' takes.
+          - ab.json
+          # A dot-prefixed name. The role matches these like any other,
+          # because the estate's sources sit on a Windows volume where a
+          # leading dot carries no hidden attribute and the PowerShell
+          # engine therefore matches them.
+          - .hidden.json
           # Two levels below sub/, so "recurse off does not descend" and
           # "preserve mirrors more than one level" are both observable.
           - sub/inner.json
@@ -122,11 +130,24 @@ provisioner:
             targetDir: "{{ target_root }}/anchor"
             preserveRelativePath: true
 
+          # The second wildcard, which nothing else here exercises: '?'
+          # matches exactly one character, so 'ab.json' is left behind
+          # where '*.json' takes it.
+          - pattern: "{{ fixture_dir }}/?.json"
+            targetDir: "{{ target_root }}/single-char"
+
           # A pattern whose matches include directories as well as files.
           # The directories must be dropped at the source, so exactly the
-          # three files directly under the fixture root land here.
+          # files directly under the fixture root land here.
           - pattern: "{{ fixture_dir }}/*"
             targetDir: "{{ target_root }}/all"
+
+          # A single form entry among the bulk ones. Both forms feed one
+          # accumulator - single entries seed it and every bulk entry
+          # appends to it - so something has to prove that resolving a
+          # bulk entry adds to that list rather than replacing it.
+          - source: "{{ fixture_dir }}/c.txt"
+            target: "{{ target_root }}/single/renamed.txt"
 
         # What each entry above must have produced, as target -> the
         # fixture whose bytes it must hold. Stated as data so the
@@ -136,6 +157,10 @@ provisioner:
             fixture: a.json
           - target: "{{ target_root }}/flat/b.json"
             fixture: b.json
+          - target: "{{ target_root }}/flat/ab.json"
+            fixture: ab.json
+          - target: "{{ target_root }}/flat/.hidden.json"
+            fixture: .hidden.json
 
           - target: "{{ target_root }}/flat-recurse/inner.json"
             fixture: sub/inner.json
@@ -152,11 +177,23 @@ provisioner:
           - target: "{{ target_root }}/anchor/v2/config.ini"
             fixture: variants/v2/config.ini
 
+          - target: "{{ target_root }}/single-char/a.json"
+            fixture: a.json
+          - target: "{{ target_root }}/single-char/b.json"
+            fixture: b.json
+
           - target: "{{ target_root }}/all/a.json"
             fixture: a.json
           - target: "{{ target_root }}/all/b.json"
             fixture: b.json
+          - target: "{{ target_root }}/all/ab.json"
+            fixture: ab.json
+          - target: "{{ target_root }}/all/.hidden.json"
+            fixture: .hidden.json
           - target: "{{ target_root }}/all/c.txt"
+            fixture: c.txt
+
+          - target: "{{ target_root }}/single/renamed.txt"
             fixture: c.txt
 
         # The other half of resolution, and the half a passing
@@ -172,6 +209,9 @@ provisioner:
           # Flatten mode puts basenames directly under targetDir; nothing
           # may mirror a sub-tree unless preserveRelativePath asked for it.
           - "{{ target_root }}/flat-recurse/deep/leaf.json"
+          # '?' is one character, not "one or more" and not "any run".
+          - "{{ target_root }}/single-char/ab.json"
+          - "{{ target_root }}/single-char/.hidden.json"
           # Directories are dropped at the source, so a match set that
           # included them must still put nothing named after one on the VM.
           - "{{ target_root }}/all/sub"

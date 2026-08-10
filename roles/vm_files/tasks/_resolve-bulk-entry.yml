@@ -44,14 +44,15 @@
 # An empty anchor means the pattern wildcards its very first component
 # below the filesystem root ('/​*.jar'), so the search starts at '/'.
 #
-# The strip expression turns any absolute path under the anchor into its
-# anchor-relative form. Two callers need exactly that: the pattern itself
-# becomes the glob to match below the anchor, and each matched file
-# becomes the sub-tree preserveRelativePath mirrors.
-- name: Derive the search root and the anchor relative path expression
+# The anchor expression matches the anchor at the head of any path below
+# it, which is the one thing all three later steps are built on: stripped
+# off a path it leaves the anchor-relative remainder (the glob to match
+# below the anchor, and the sub-tree preserveRelativePath mirrors), and
+# left in place it is the head of the match expression itself.
+- name: Derive the search root and the expression matching the anchor
   ansible.builtin.set_fact:
     vm_files_bulk_search_path: "{{ vm_files_bulk_anchor | default('/', true) }}"
-    vm_files_bulk_anchor_strip_re: >-
+    vm_files_bulk_anchor_re: >-
       ^{{ vm_files_bulk_anchor | regex_escape }}/?
 
 # Matching is done by one expression applied to full paths, rather than by
@@ -77,12 +78,12 @@
     vm_files_bulk_recurse: "{{ vm_files_bulk_entry.recurse | default(false) }}"
     vm_files_bulk_glob_parts: >-
       {{ (vm_files_bulk_entry.pattern
-          | regex_replace(vm_files_bulk_anchor_strip_re, '')).rsplit('/', 1) }}
+          | regex_replace(vm_files_bulk_anchor_re, '')).rsplit('/', 1) }}
   ansible.builtin.set_fact:
     vm_files_bulk_search_recurse: >-
       {{ vm_files_bulk_recurse or vm_files_bulk_glob_parts | length > 1 }}
     vm_files_bulk_match_re: |-
-      ^{{ vm_files_bulk_anchor | regex_escape }}/?
+      {{ vm_files_bulk_anchor_re }}
       {%- for vm_files_glob_part in vm_files_bulk_glob_parts %}
         {%- if not loop.first %}/{% endif %}
         {%- if loop.last and vm_files_bulk_recurse %}(?:[^/]+/)*{% endif %}
@@ -149,7 +150,7 @@
            'source': item,
            'target': vm_files_bulk_target_dir ~ '/' ~ (
              (vm_files_bulk_entry.preserveRelativePath | default(false))
-             | ternary(item | regex_replace(vm_files_bulk_anchor_strip_re, ''),
+             | ternary(item | regex_replace(vm_files_bulk_anchor_re, ''),
                        item | basename)) }] }}
   loop: "{{ vm_files_bulk_sources }}"
   loop_control:
