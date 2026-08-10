@@ -53,12 +53,19 @@
 #   status   (required) copied (this run wrote the bytes) | unchanged (the
 #                       file was already current, so the run touched
 #                       nothing).
-#   origin   (required) single (a declared source/target entry) | bulk (a
-#                       file some glob matched). Groups the report, because
-#                       the two need reading differently: a single entry is
-#                       verifiable against the config by eye, a bulk one is
-#                       only knowable from the run.
-#   pattern  (required) The glob that produced this file; "" for a single
-#                       entry. Present on every entry rather than only on
-#                       bulk ones so the template reads one shape.
+#   pattern  (required) The glob that produced this file; "" for a file that
+#                       was named outright. Present on every entry rather
+#                       than only on matched ones so the template reads one
+#                       shape.
+#
+# The entry's ORIGIN is its pattern's presence, not a field of its own: a
+# named file has no pattern and a matched one always has the pattern that
+# named it. That is the discriminator vm_files already uses to tell the two
+# entry forms apart, and one fact stored twice is one fact that can
+# contradict itself - an entry claiming to be named while carrying a glob
+# would render under a heading its own data denies.
+#
+# The report groups by it because the two need reading differently: a named
+# file is verifiable against the config by eye, a matched one is only
+# knowable from the run.
 files_report_entries: []

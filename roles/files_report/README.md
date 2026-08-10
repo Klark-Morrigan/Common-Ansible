@@ -66,8 +66,14 @@ Full field documentation lives in
   by an operator. **One entry per file that landed, not per declared
   entry**: a bulk entry contributes as many as its glob matched. Each
   carries `source`, `target`, `owner`, `group`, `mode`, `status`
-  (`copied` | `unchanged`), `origin` (`single` | `bulk`) and `pattern`
-  (`""` for a named file).
+  (`copied` | `unchanged`) and `pattern` (`""` for a file that was named
+  outright).
+
+An entry's origin is the **presence of its pattern**, not a field of its
+own. A named file has no pattern and a matched one always carries the glob
+that named it, so a separate field would store one fact twice and let an
+entry contradict itself. It is also the discriminator `vm_files` already
+uses to tell the two entry forms apart.
 
 `owner`, `group` and `mode` are quoted from the transport's own policy
 constants rather than re-stated here, so the report cannot describe
@@ -183,12 +189,16 @@ through molecule inventory vars and asserts the rendered
 
 | Case | What it pins down |
 | --- | --- |
-| Both origins | Named files and matched files render in their own sections |
+| Named and matched files | Each renders in its own section |
 | Both statuses | The header counts them, and each row carries its own |
 | Two statuses under one pattern | Status is per file, not per declared entry - which is why the accumulator holds one entry per file |
 | Two patterns | The grouping is grouping, not one block with a heading |
 | A preserved sub-tree target | The report prints `v1/` where the pattern says `v*` - a path obtainable only from the run |
+| Named files only | The matched section is **absent**, not an empty heading - which would read as a glob that matched nothing, a case the transport turns into a hard error |
 | No entries at all | Reads as "nothing was declared" rather than as an empty heading |
+
+The last two render subsets of the same seeded set rather than second
+fixtures, so a case cannot drift away from the mixed one it is cut from.
 
 Seeding through inventory (rather than in `converge.yml`) is what lets
 `verify.yml` re-render from the same source: facts set during converge do

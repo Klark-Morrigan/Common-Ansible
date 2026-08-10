@@ -8,11 +8,15 @@
 # verify time. An inventory var is visible to both plays, which lets
 # verify.yml re-render from the same single source and assert on it.
 #
-# It covers, in one host: both origins, both statuses, both statuses
-# WITHIN one pattern group (so the status column is per file rather than
-# per entry), two patterns (so the grouping is grouping and not one block
-# with a heading), and a preserved sub-tree whose targets carry a
+# It covers, in one host: named and matched files, both statuses, both
+# statuses WITHIN one pattern group (so the status column is per file
+# rather than per entry), two patterns (so the grouping is grouping and not
+# one block with a heading), and a preserved sub-tree whose targets carry a
 # directory the pattern's own text does not.
+#
+# verify.yml re-renders subsets of this same set for the cases a mixed one
+# cannot state: a host with no matched files, and a host with nothing
+# declared at all.
 #
 # What the accumulator looks like when vm_files really produces it is
 # asserted in the vm_files scenarios' converges instead - see those. This
@@ -69,7 +73,6 @@ provisioner:
             group: root
             mode: "0644"
             status: copied
-            origin: single
             pattern: ""
           # Single form, already current. Pairs with the one above so the
           # status column is proven to vary within a section.
@@ -79,7 +82,6 @@ provisioner:
             group: root
             mode: "0644"
             status: unchanged
-            origin: single
             pattern: ""
           # First pattern group, flattened. Two files with DIFFERENT
           # statuses under one pattern - the case that proves status is
@@ -91,7 +93,6 @@ provisioner:
             group: root
             mode: "0644"
             status: copied
-            origin: bulk
             pattern: /mnt/c/estate/jars/*.jar
           - source: /mnt/c/estate/jars/beta.jar
             target: /opt/app/lib/beta.jar
@@ -99,7 +100,6 @@ provisioner:
             group: root
             mode: "0644"
             status: unchanged
-            origin: bulk
             pattern: /mnt/c/estate/jars/*.jar
           # Second pattern group, and a preserved sub-tree: the target
           # carries 'v1/' where the pattern text carries 'v*'. An operator
@@ -111,7 +111,6 @@ provisioner:
             group: root
             mode: "0644"
             status: copied
-            origin: bulk
             pattern: /mnt/c/estate/conf/v*/site.ini
 
 verifier:

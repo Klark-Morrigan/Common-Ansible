@@ -61,14 +61,14 @@
           - >-
             files_report_entries | map(attribute='pattern') | unique
             | reject('equalto', '') | sort | list == declared_patterns
-          # The single form entry among them keeps its own origin, so the
-          # report does not attribute a named file to some pattern it
-          # happens to sit near.
+          # The single form entry among them carries no pattern, so the
+          # report cannot attribute a named file to some glob it happens to
+          # sit near - and every other entry must carry one.
           - >-
-            files_report_entries | selectattr('origin', 'equalto', 'single')
+            files_report_entries | rejectattr('pattern')
             | map(attribute='target') | list == single_targets
           - >-
-            files_report_entries | selectattr('origin', 'equalto', 'bulk')
+            files_report_entries | selectattr('pattern')
             | list | length == (expected_files | length) - (single_targets | length)
         fail_msg: >-
           the files report accumulator does not account for the resolved
@@ -83,3 +83,22 @@
     - name: Render the report from the accumulator the transport produced
       ansible.builtin.include_role:
         name: files_report
+
+    # One claim about the rendering, made here because this is the only
+    # fixture that can make it: two of the declared entries share a glob
+    # with different targetDirs, so the report must merge them into ONE
+    # group carrying both landings. Everything else about the layout belongs
+    # to Tests/molecule/files_report, and is not restated here.
+    - name: Assert one pattern declared twice renders as one merged group
+      vars:
+        shared_pattern: "{{ fixture_dir }}/sub/*.json"
+      ansible.builtin.assert:
+        that:
+          - files_report_lines | select('search', '^  pattern ')
+            | list | length == declared_patterns | length
+          - >-
+            '  pattern ' ~ shared_pattern ~ ' -- 4 landed'
+            in files_report_lines
+        fail_msg: >-
+          the report did not merge the twice-declared glob into one group:
+          {{ files_report_lines }}

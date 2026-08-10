@@ -237,10 +237,10 @@ policy is applied rather than merely inherited. One entry per case:
 | No entries declared | The no-op promise above holds, rather than tripping over an empty loop's register, and contributes nothing to the report |
 
 Its converge also asserts the report accumulator: one entry per copied
-file, each carrying the target and source it was declared with, the
-single-form origin, and the ownership the verifier independently reads back
-off the VM - so the two together prove the report describes what actually
-landed.
+file, each carrying the target and source it was declared with, no pattern
+(these were named outright), and the ownership the verifier independently
+reads back off the VM - so the two together prove the report describes what
+actually landed.
 
 `molecule idempotence` covers the re-run.
 
@@ -273,12 +273,16 @@ re-run, which for this scenario also means the expansion is stable.
 
 Its converge asserts the report accounts for every resolved file - one
 entry per matched file with its VM path, every declared glob represented,
-and the single-form entry keeping its own origin - and then renders the
-report from that accumulator. Rendering it here is what makes the producer
-and the template meet on real data:
+and the single form entry among them carrying no pattern - and then renders
+the report from that accumulator. Rendering it here is what makes the
+producer and the template meet on real data:
 [`Tests/molecule/files_report`](../files_report/README.md#tests) seeds its
 entries by hand, so a field this role stopped emitting would pass there and
 surface only in front of an operator.
+
+It also makes the one rendering claim only this fixture can make: two of its
+entries share a glob with different `targetDir`s, so the report must merge
+them into a single pattern group carrying both landings.
 
 Both accumulator assertions treat `copied`/`unchanged` as a domain rather
 than pinning a value, because `molecule idempotence` re-runs the same

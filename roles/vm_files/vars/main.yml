@@ -72,10 +72,12 @@ vm_files_unsupported_wildcard: "["
 # carried on the controller. The rationale for the values themselves lives
 # in the role README (Transport).
 #
-# Named here rather than written on the tasks because the report quotes
-# them: an operator reading 'root:root 0644' off the report is reading the
-# same six values the transport applied, so the report cannot claim a
-# policy the role does not enforce.
+# The file trio is named because the report quotes it: an operator reading
+# 'root:root 0644' off the report is reading the same three values the
+# transport applied, so the report cannot claim a policy the role does not
+# enforce. The directory trio has one use site and no second reader; it is
+# named alongside it so the whole policy is stated in one place rather than
+# half here and half inline on a task.
 #
 # In vars/ for the same reason the schema lists are: the policy is an
 # invariant consumers rely on, so a caller must not be able to override it

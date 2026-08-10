@@ -52,11 +52,8 @@
           - >-
             files_report_entries | map(attribute='source') | sort | list
             == fixture_entries | map(attribute='source') | sort | list
-          # Single form throughout, so nothing here may claim a glob
-          # produced it.
-          - >-
-            files_report_entries | selectattr('origin', 'equalto', 'single')
-            | list | length == fixture_entries | length
+          # Single form throughout, and a pattern is what marks a file as
+          # glob-matched, so nothing here may carry one.
           - files_report_entries | selectattr('pattern') | list | length == 0
           # The report quotes the policy the transport applied, which
           # verify.yml independently reads back off the VM - so the two

@@ -31,22 +31,24 @@
 {% set entries = files_report_entries | default([]) %}
 {% set copied = entries | selectattr('status', 'equalto', 'copied') | list %}
 {% set unchanged = entries | selectattr('status', 'equalto', 'unchanged') | list %}
-{% set singles = entries | selectattr('origin', 'equalto', 'single') | list %}
-{% set bulk = entries | selectattr('origin', 'equalto', 'bulk') | list %}
+{# Presence of a pattern is what makes a file "matched" rather than
+   "named" - see defaults/main.yml for why that is not a field of its own. #}
+{% set named = entries | rejectattr('pattern') | list %}
+{% set matched = entries | selectattr('pattern') | list %}
 Files report for {{ inventory_hostname }} -- {{ copied | length }} copied, {{ unchanged | length }} unchanged
 {% if not entries %}
   (no file entries were declared - nothing was copied here)
 {% endif %}
-{% if singles %}
+{% if named %}
 section 1 - named files (one declared entry, one file)
-{% for entry in singles %}
+{% for entry in named %}
   {{ "%-9s" | format(entry.status) }} {{ entry.target }}  {{ entry.owner }}:{{ entry.group }} {{ entry.mode }}
       source  {{ entry.source }}
 {% endfor %}
 {% endif %}
-{% if bulk %}
+{% if matched %}
 section 2 - glob matched files (one declared entry, every file it named)
-{% for pattern, rows in bulk | groupby('pattern') %}
+{% for pattern, rows in matched | groupby('pattern') %}
   pattern {{ pattern }} -- {{ rows | length }} landed
 {% for entry in rows %}
     {{ "%-9s" | format(entry.status) }} {{ entry.target }}  {{ entry.owner }}:{{ entry.group }} {{ entry.mode }}

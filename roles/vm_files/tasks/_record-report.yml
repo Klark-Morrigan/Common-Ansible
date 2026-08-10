@@ -45,8 +45,7 @@
       mode: "{{ vm_files_file_mode }}"
       status: "{{ item.changed | ternary('copied', 'unchanged') }}"
       # A resolved pair carries its `pattern` only when a glob produced it,
-      # so its presence is the origin - the same discriminator the entry
-      # forms use. Reported as "" for a single entry rather than omitted,
-      # so every entry has the same shape for the template to read.
-      origin: "{{ 'bulk' if item.item.pattern | default('') else 'single' }}"
+      # so its presence IS the entry's origin - no separate field, which is
+      # also the discriminator the entry forms themselves use. Defaulted to
+      # "" rather than omitted so every entry has one shape to read.
       pattern: "{{ item.item.pattern | default('') }}"

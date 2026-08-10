@@ -120,6 +120,46 @@
           - files_report_lines | select('match', '^\\s*$') | list | length == 0
         fail_msg: "the report emitted blank lines: {{ files_report_lines }}"
 
+    # A host declaring only named files - the common shape, since a glob is
+    # the exception rather than the rule. Its section must simply be absent:
+    # an empty "section 2" heading reads as a glob that matched nothing,
+    # which is a failure the role turns into a hard error elsewhere, so
+    # printing one here would contradict it.
+    #
+    # Rendered from a subset of the same seeded set rather than a second
+    # fixture, so the two cannot drift apart.
+    #
+    # The subset is materialised into a fact first. Passing the expression
+    # straight to the include would define files_report_entries in terms of
+    # itself, and Ansible's lazy templating resolves that as a recursive
+    # loop rather than as "the previous value".
+    - name: Select only the named files out of the seeded entry set
+      ansible.builtin.set_fact:
+        named_only_entries: >-
+          {{ files_report_entries | rejectattr('pattern') | list }}
+
+    - name: Re-render the report with no matched files
+      ansible.builtin.include_role:
+        name: files_report
+      vars:
+        files_report_entries: "{{ named_only_entries }}"
+
+    - name: Assert a section with no files is absent rather than empty
+      ansible.builtin.assert:
+        that:
+          - files_report_lines | select('search', '^section 1 - ')
+            | list | length == 1
+          - files_report_lines | select('search', '^section 2 - ')
+            | list | length == 0
+          - files_report_lines | select('search', '^  pattern ')
+            | list | length == 0
+          - >-
+            files_report_lines[0]
+            == 'Files report for instance -- 1 copied, 1 unchanged'
+        fail_msg: >-
+          a named-files-only report did not drop the matched section:
+          {{ files_report_lines }}
+
     # The report a VM whose config declares no files gets, which is the
     # common case until an estate starts using the schema. It has to read
     # as "nothing was asked for" rather than as an empty heading an
