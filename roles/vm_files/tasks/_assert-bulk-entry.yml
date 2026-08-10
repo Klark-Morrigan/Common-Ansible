@@ -1,0 +1,66 @@
+---
+# Rules for the bulk form - every controller-side file matching a glob,
+# copied under one target directory. Ported from Assert-VmFileBulkEntry.
+#
+# The pattern is not resolved here. A glob is time-varying, so the
+# resolution the transport performs is the only one whose answer is still
+# true when the files are read; a zero-match surfaces there.
+#
+# Caller contract (set by _assert-entry.yml):
+#   vm_files_entry      the entry under validation, known to be a mapping
+#                       carrying 'pattern'.
+#   vm_files_entry_ctx  message prefix naming the entry.
+
+- name: Assert the bulk form file entry has no unknown sub-fields
+  vars:
+    vm_files_unknown_fields: >-
+      {{ vm_files_entry.keys() | list
+         | difference(vm_files_bulk_allowed_fields) }}
+  ansible.builtin.assert:
+    that:
+      - vm_files_unknown_fields | length == 0
+    fail_msg: >-
+      {{ vm_files_entry_ctx }} has unknown sub-field(s)
+      '{{ vm_files_unknown_fields | join(', ') }}'. Allowed bulk-form
+      sub-fields: {{ vm_files_bulk_allowed_fields | join(', ') }}.
+
+- name: Assert the bulk form file entry pattern is a non-empty string
+  ansible.builtin.assert:
+    that:
+      - vm_files_entry.pattern is string
+      - vm_files_entry.pattern | trim | length > 0
+    fail_msg: >-
+      {{ vm_files_entry_ctx }}.pattern must be a non-empty string
+      (a controller-side glob).
+
+- name: Assert the bulk form file entry declares a targetDir
+  ansible.builtin.assert:
+    that:
+      - "'targetDir' in vm_files_entry"
+    fail_msg: >-
+      {{ vm_files_entry_ctx }} is missing required sub-field 'targetDir'.
+
+# The type test comes first because assert stops at the first false
+# condition, so `startswith` is only reached on a string.
+- name: Assert the bulk form file entry targetDir is an absolute path
+  ansible.builtin.assert:
+    that:
+      - vm_files_entry.targetDir is string
+      - vm_files_entry.targetDir | trim | length > 0
+      - vm_files_entry.targetDir.startswith('/')
+    fail_msg: >-
+      {{ vm_files_entry_ctx }}.targetDir must be a non-empty absolute
+      directory path on the VM, starting with '/'
+      (got '{{ vm_files_entry.targetDir }}').
+
+# Absent is legal and means false, so the check is on the value only when
+# the operator supplied one - `default(false)` collapses "absent" onto the
+# documented default rather than treating it as a type violation.
+- name: Assert each optional bulk form flag is a boolean
+  ansible.builtin.assert:
+    that:
+      - vm_files_entry[item] | default(false) is boolean
+    fail_msg: >-
+      {{ vm_files_entry_ctx }}.{{ item }} must be a boolean
+      (got '{{ vm_files_entry[item] }}').
+  loop: "{{ vm_files_bulk_flag_fields }}"

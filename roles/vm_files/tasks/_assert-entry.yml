@@ -1,0 +1,51 @@
+---
+# Shared per-entry checks, then dispatch to the matching form.
+#
+# Caller contract (set by the loop in main.yml):
+#   vm_files_entry        the entry under validation, any shape.
+#   vm_files_entry_index  its position in vm_files_entries.
+
+# Every rejection message below opens with this, so an operator reading a
+# failed run knows which entry of which host's definition to fix - the one
+# thing a raw "must be a mapping" cannot tell them.
+- name: Record the message context for this file entry
+  ansible.builtin.set_fact:
+    vm_files_entry_ctx: >-
+      vm_files_entries[{{ vm_files_entry_index }}] on host
+      '{{ inventory_hostname }}'
+
+- name: Assert the file entry is a mapping
+  ansible.builtin.assert:
+    that:
+      - vm_files_entry is mapping
+    fail_msg: >-
+      {{ vm_files_entry_ctx }} must be a mapping (a JSON object), got
+      '{{ vm_files_entry }}'.
+
+# Discrimination happens before either form's sub-field check so that an
+# ambiguous or discriminator-less entry produces a message naming the
+# choice the operator has to make, instead of an "unknown sub-field
+# 'pattern'" that hides it.
+- name: Assert the file entry declares only one of source and pattern
+  ansible.builtin.assert:
+    that:
+      - not ('source' in vm_files_entry and 'pattern' in vm_files_entry)
+    fail_msg: >-
+      {{ vm_files_entry_ctx }} has both 'source' and 'pattern'; only one
+      is allowed (single vs bulk form).
+
+- name: Assert the file entry declares either source or pattern
+  ansible.builtin.assert:
+    that:
+      - "'source' in vm_files_entry or 'pattern' in vm_files_entry"
+    fail_msg: >-
+      {{ vm_files_entry_ctx }} is missing required sub-field; expected
+      'source' (single form) or 'pattern' (bulk form).
+
+- name: Assert the single form file entry
+  ansible.builtin.include_tasks: _assert-single-entry.yml
+  when: "'source' in vm_files_entry"
+
+- name: Assert the bulk form file entry
+  ansible.builtin.include_tasks: _assert-bulk-entry.yml
+  when: "'pattern' in vm_files_entry"

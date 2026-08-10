@@ -1,0 +1,58 @@
+---
+# Rules for the single form - one named source file copied to one named
+# target path. Ported from Assert-VmFileSingleEntry.
+#
+# The source's existence is deliberately NOT checked here. It lives on the
+# controller, while this play runs against the target, so a check would
+# need a delegated probe per entry; the transport reports a missing source
+# authoritatively anyway, and does it without pretending that a file
+# present at validation time is still present a minute later.
+#
+# Caller contract (set by _assert-entry.yml):
+#   vm_files_entry      the entry under validation, known to be a mapping
+#                       carrying 'source'.
+#   vm_files_entry_ctx  message prefix naming the entry.
+
+- name: Assert the single form file entry has no unknown sub-fields
+  vars:
+    vm_files_unknown_fields: >-
+      {{ vm_files_entry.keys() | list
+         | difference(vm_files_single_allowed_fields) }}
+  ansible.builtin.assert:
+    that:
+      - vm_files_unknown_fields | length == 0
+    fail_msg: >-
+      {{ vm_files_entry_ctx }} has unknown sub-field(s)
+      '{{ vm_files_unknown_fields | join(', ') }}'. Allowed single-form
+      sub-fields: {{ vm_files_single_allowed_fields | join(', ') }}.
+
+- name: Assert the single form file entry source is a non-empty string
+  ansible.builtin.assert:
+    that:
+      - vm_files_entry.source is string
+      - vm_files_entry.source | trim | length > 0
+    fail_msg: >-
+      {{ vm_files_entry_ctx }}.source must be a non-empty string
+      (a controller-side path).
+
+- name: Assert the single form file entry declares a target
+  ansible.builtin.assert:
+    that:
+      - "'target' in vm_files_entry"
+    fail_msg: >-
+      {{ vm_files_entry_ctx }} is missing required sub-field 'target'.
+
+# One assert, not two: an empty target and a relative one are the same
+# mistake from the operator's side - a destination that is not a usable
+# absolute VM path - and the message states both halves of the rule.
+# The type test comes first because assert stops at the first false
+# condition, so `startswith` is only reached on a string.
+- name: Assert the single form file entry target is an absolute path
+  ansible.builtin.assert:
+    that:
+      - vm_files_entry.target is string
+      - vm_files_entry.target | trim | length > 0
+      - vm_files_entry.target.startswith('/')
+    fail_msg: >-
+      {{ vm_files_entry_ctx }}.target must be a non-empty absolute path
+      on the VM, starting with '/' (got '{{ vm_files_entry.target }}').

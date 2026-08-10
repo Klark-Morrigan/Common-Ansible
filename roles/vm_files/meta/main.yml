@@ -1,0 +1,26 @@
+---
+# Role metadata. The galaxy_info block exists to satisfy ansible-lint's
+# role-name / meta-no-info rules, not to publish to Galaxy (this repo is
+# consumed via a sibling checkout - see the repo README).
+
+galaxy_info:
+  role_name: vm_files
+  author: Common-Ansible
+  description: >-
+    Transport operator-declared host files onto a provisioned VM. Consumes
+    the `files` array of a VM definition unchanged, in both its single and
+    its bulk (glob) form, and rejects a malformed entry before any transport
+    begins.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+  galaxy_tags:
+    - system
+    - files
+
+# Standalone: the role carries its whole mechanism and reads the desired
+# entries from the caller's vars. Nothing else depends on it as a meta dep.
+dependencies: []

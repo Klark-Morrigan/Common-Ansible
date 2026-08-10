@@ -1,0 +1,41 @@
+---
+# Validate every declared file entry before any transport happens.
+#
+# The validation is the role's own, not something inherited from a caller
+# that may not have run one: this role is a provisioning vector in its own
+# right, so an operator typo has to die here rather than surface as a
+# half-copied VM. Doing it up front - before the first byte crosses the
+# connection - also means a rejected run leaves the target exactly as it
+# found it.
+#
+# The shape rules are ported from the PowerShell engine that owns the same
+# `files` schema (Infrastructure.HyperV: Assert-VmFilesField and its
+# single/bulk asserts), so a definition is accepted or rejected identically
+# whichever engine runs it. The split below mirrors that structure - a
+# dispatcher that discriminates the two forms, plus one file per form -
+# for the same reason it exists there: the forms evolve independently.
+
+- name: Assert the declared file entries are a list
+  ansible.builtin.assert:
+    that:
+      # A bare string and a mapping both satisfy Jinja's `sequence` test,
+      # and both are plausible mistakes (a single entry written without
+      # its enclosing list), so each is excluded explicitly.
+      - vm_files_entries is sequence
+      - vm_files_entries is not string
+      - vm_files_entries is not mapping
+    fail_msg: >-
+      vm_files_entries must be a list of file entries
+      (got '{{ vm_files_entries }}').
+
+- name: Assert each declared file entry is well formed
+  ansible.builtin.include_tasks: _assert-entry.yml
+  loop: "{{ vm_files_entries }}"
+  loop_control:
+    loop_var: vm_files_entry
+    index_var: vm_files_entry_index
+    # The entry itself is not a usable label - it may be any shape at all
+    # at this point, including the malformed ones this loop exists to
+    # reject - so the label is its position, which is also what every
+    # rejection message names.
+    label: "vm_files_entries[{{ vm_files_entry_index }}]"

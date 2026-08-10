@@ -1,0 +1,147 @@
+---
+# Verify - the rejection matrix: one case per schema rule, each a minimal
+# mutation of a shape the converge accepts.
+#
+# Every case asserts two things at once. That the rule fired at all, and
+# that the message an operator will read names the rule they broke -
+# because a validator whose diagnostics are unreadable costs more than the
+# typo it caught.
+#
+# Cases run against the role itself through ../tasks/_assert-entry-rejected.yml;
+# nothing here re-implements a rule, so the matrix cannot drift into
+# agreeing with a broken role.
+
+- name: Verify - every malformed vm_files entry shape is rejected
+  hosts: all
+  gather_facts: false
+  vars:
+    vm_files_cases:
+      # The container of the entries, before any entry is looked at. A
+      # bare mapping and a bare string are the two ways an operator drops
+      # the enclosing list.
+      - name: entries are a bare string
+        entries: "/opt/app.conf"
+        expect:
+          - "vm_files_entries must be a list"
+
+      - name: entries are a bare mapping
+        entries: {source: /opt/app.conf, target: /etc/app.conf}
+        expect:
+          - "vm_files_entries must be a list"
+
+      - name: entry is not a mapping
+        entries:
+          - "/opt/app.conf"
+        expect:
+          - "must be a mapping"
+          - "vm_files_entries[0]"
+
+      # Form discrimination, which has to resolve before either form's
+      # sub-field rules can mean anything.
+      - name: entry declares both source and pattern
+        entries:
+          - source: /opt/app.conf
+            target: /etc/app.conf
+            pattern: /opt/*.conf
+        expect:
+          - "has both 'source' and 'pattern'"
+
+      - name: entry declares neither source nor pattern
+        entries:
+          - target: /etc/app.conf
+        expect:
+          - "expected 'source' (single form) or 'pattern' (bulk form)"
+
+      # Single form.
+      - name: single form entry has an unknown sub-field
+        entries:
+          - source: /opt/app.conf
+            target: /etc/app.conf
+            dest: /etc/other.conf
+        expect:
+          - "unknown sub-field(s) 'dest'"
+
+      - name: single form entry source is whitespace
+        entries:
+          - source: "   "
+            target: /etc/app.conf
+        expect:
+          - ".source must be a non-empty string"
+
+      - name: single form entry is missing target
+        entries:
+          - source: /opt/app.conf
+        expect:
+          - "missing required sub-field 'target'"
+
+      - name: single form entry target is relative
+        entries:
+          - source: /opt/app.conf
+            target: etc/app.conf
+        expect:
+          - ".target must be a non-empty absolute path"
+
+      # Bulk form.
+      - name: bulk form entry has an unknown sub-field
+        entries:
+          - pattern: /opt/*.jar
+            targetDir: /opt/app
+            recursive: true
+        expect:
+          - "unknown sub-field(s) 'recursive'"
+
+      - name: bulk form entry pattern is empty
+        entries:
+          - pattern: ""
+            targetDir: /opt/app
+        expect:
+          - ".pattern must be a non-empty string"
+
+      - name: bulk form entry is missing targetDir
+        entries:
+          - pattern: /opt/*.jar
+        expect:
+          - "missing required sub-field 'targetDir'"
+
+      - name: bulk form entry targetDir is relative
+        entries:
+          - pattern: /opt/*.jar
+            targetDir: opt/app
+        expect:
+          - ".targetDir must be a non-empty absolute"
+
+      # The optional flags: a quoted "true" is the shape a hand-edited
+      # config produces, and it must not pass as the boolean it resembles.
+      - name: bulk form entry recurse is a string
+        entries:
+          - pattern: /opt/*.jar
+            targetDir: /opt/app
+            recurse: "true"
+        expect:
+          - ".recurse must be a boolean"
+
+      - name: bulk form entry preserveRelativePath is a string
+        entries:
+          - pattern: /opt/*.jar
+            targetDir: /opt/app
+            preserveRelativePath: "yes"
+        expect:
+          - ".preserveRelativePath must be a boolean"
+
+      # A well-formed entry ahead of the broken one, so the reported
+      # position is the offending entry's rather than the first entry's.
+      - name: rejection names the offending entry's position
+        entries:
+          - source: /opt/app.conf
+            target: /etc/app.conf
+          - source: /opt/other.conf
+            target: etc/other.conf
+        expect:
+          - "vm_files_entries[1]"
+  tasks:
+    - name: Assert each malformed entry shape is rejected
+      ansible.builtin.include_tasks: ../tasks/_assert-entry-rejected.yml
+      loop: "{{ vm_files_cases }}"
+      loop_control:
+        loop_var: vm_files_case
+        label: "{{ vm_files_case.name }}"
