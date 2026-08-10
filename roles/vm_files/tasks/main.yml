@@ -14,6 +14,9 @@
 # whichever engine runs it. The split below mirrors that structure - a
 # dispatcher that discriminates the two forms, plus one file per form -
 # for the same reason it exists there: the forms evolve independently.
+#
+# TODO: transport. The role validates the contract and copies nothing yet,
+# so a play including it today reconciles no files.
 
 - name: Assert the declared file entries are a list
   ansible.builtin.assert:

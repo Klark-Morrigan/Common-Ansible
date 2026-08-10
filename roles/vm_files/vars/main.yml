@@ -3,24 +3,29 @@
 # defaults/main.yml owns that. These live in vars/ (not defaults/)
 # precisely so a caller cannot override them: the sub-field sets ARE the
 # contract, so a consumer widening one locally would fork the schema.
+#
+# Each sub-field is named exactly once. The allow-lists that drive the
+# unknown-sub-field rejection are composed from the same lists the other
+# rules read, so extending a form cannot leave one rule behind - adding a
+# flag to the bulk form below both admits it and type-checks it. They are
+# named at all (rather than inlined at each use) so a rejection message
+# can print the permitted set back to the operator from the very source
+# it was validated against.
 
-# Allow-lists driving the unknown-sub-field rejection, one per entry
-# form. Named rather than inlined so the rejection message can print the
-# permitted set back to the operator from the same source it validated
-# against.
 vm_files_single_allowed_fields:
   - source
   - target
 
-vm_files_bulk_allowed_fields:
+vm_files_bulk_required_fields:
   - pattern
   - targetDir
-  - recurse
-  - preserveRelativePath
 
 # The optional bulk sub-fields whose only rule is "boolean if present".
-# A list, so the type check is one looped task instead of one task per
-# flag that would drift apart as the set grows.
+# A list, so the type check is one looped task rather than one task per
+# flag for the loop to drift away from.
 vm_files_bulk_flag_fields:
   - recurse
   - preserveRelativePath
+
+vm_files_bulk_allowed_fields: >-
+  {{ vm_files_bulk_required_fields + vm_files_bulk_flag_fields }}

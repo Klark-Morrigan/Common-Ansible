@@ -36,6 +36,16 @@
           - "must be a mapping"
           - "vm_files_entries[0]"
 
+      # A null element is what a trailing comma or a commented-out entry
+      # leaves behind in a hand-edited definition, and it reaches the
+      # rules as a shape no sub-field check can be run against.
+      - name: entry is null
+        entries:
+          - ~
+        expect:
+          - "must be a mapping"
+          - "vm_files_entries[0]"
+
       # Form discrimination, which has to resolve before either form's
       # sub-field rules can mean anything.
       - name: entry declares both source and pattern

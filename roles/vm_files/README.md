@@ -10,6 +10,12 @@ redesigned: a definition a consumer's config already carries is valid here
 unchanged, and is accepted or rejected identically whichever engine runs
 it.
 
+**TODO: transport.** What the role owns today is the contract and its
+validation - it copies nothing yet, so a play including it reconciles no
+files. The sections below describe the contract, which is complete; the
+[consuming example](#consuming-this-role) declares what will be
+transported rather than what is transported today.
+
 ## Index
 
 - [Entry contract](#entry-contract)

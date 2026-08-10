@@ -25,6 +25,12 @@
         targetDir: /opt/vm-files-schema/bulk
         recurse: false
         preserveRelativePath: false
+      # The same bulk entry with both optional flags omitted. Absent is
+      # legal and means false, and that is a distinct code path from a
+      # flag supplied as false - without this entry a rule that rejected
+      # an absent flag outright would pass every case in this scenario.
+      - pattern: "{{ playbook_dir }}/*.yml"
+        targetDir: /opt/vm-files-schema/bulk-defaults
   tasks:
     - name: Include the role under test
       ansible.builtin.include_role:
