@@ -31,8 +31,10 @@ was extended by the feature step that earned it.
     - [bats-libraries toolchain pattern (toolchain_bats_libs)](#bats-libraries-toolchain-pattern-toolchain_bats_libs)
   - [Section 3 - base-image daemons](#section-3---base-image-daemons)
     - [Docker daemon (docker)](#docker-daemon-docker)
+  - [Operator-declared VM state - the file transport (vm_files)](#operator-declared-vm-state---the-file-transport-vm_files)
   - [Cross-section - the reconciliation report (toolchain_report)](#cross-section---the-reconciliation-report-toolchain_report)
   - [Cross-section - the artifact report (artifact_report)](#cross-section---the-artifact-report-artifact_report)
+  - [The file transport report (files_report)](#the-file-transport-report-files_report)
   - [Shared report plumbing (report_render)](#shared-report-plumbing-report_render)
 - [Tests and lint](#tests-and-lint)
   - [Ansible lint gate (ci-ansible.yml)](#ansible-lint-gate-ci-ansibleyml)
@@ -291,11 +293,13 @@ compose, the orchestrator itself) stay at the `ops/` root:
   argv on Linux is private to the owning user's process tree.
   Keeping dispatch a pure `<Name>` derivation here (the layer that
   already dispatches per domain) is what lets the orchestrator stay
-  ignorant of any specific consumer. Future payload domains (e.g.
-  toolchain delivery: JDK / .NET SDK / file copy) land as a peer
-  `_build-extra-vars-<Name>.sh` dispatched by the same derivation —
-  the bridge already forwards every declared vault verbatim, so no
-  call site here changes.
+  ignorant of any specific consumer. A payload domain that needs its
+  own vault lands as a peer `_build-extra-vars-<Name>.sh` dispatched by
+  the same derivation - the bridge already forwards every declared
+  vault verbatim, so no call site here changes. A flow whose desired
+  state already rides in the shared inventory needs no helper at all:
+  the `files` transport reshapes that inventory consumer-side and hands
+  the result to its playbook as extra-vars.
 - [`ops/_run-playbook.sh`](ops/_run-playbook.sh) - thin,
   consumer-agnostic orchestrator. Validates args, parses the consumer
   contract (via `_parse-consumer-contract.sh`), sets up a
@@ -461,12 +465,21 @@ their short name once `<root>/roles` is on `ANSIBLE_ROLES_PATH` (see
 [Consuming the substrate](#consuming-the-substrate)). Roles read the
 extra-vars and inventory the bridge composes and are not standalone.
 
-They are grouped below by the same three-section acquisition taxonomy the
+The toolchain roles are grouped below by the same three-section acquisition
+taxonomy the
 [`toolchains` config block](#the-toolchains-taxonomy-block-vm_provisioner_configtoolchains)
 uses - **how** each tool reaches the target, which is what decides a role's
 shape far more than what it installs. Within a section the roles share a
 mechanism (and, in section 1, a literal shared pattern role); across
 sections they share almost nothing.
+
+That taxonomy covers toolchains only. Roles that reconcile operator-declared
+VM state - content the operator names in the VM definition rather than a tool
+the estate installs - sit outside it and are grouped separately: they carry no
+versions, no manifests and no uninstall direction, because every declared item
+is reconciled on every run rather than short-circuiting on a recorded install.
+The report roles close the section, one per subject plus the shared tail they
+all delegate to.
 
 ### Section 1 - host-pushed toolchains
 
@@ -670,6 +683,56 @@ systemd-init container so the inner daemon really starts and `verify` can
 run `docker ps`. Full var contract, the security note, and the
 docker-in-docker caveat are in the [role README](roles/docker/README.md).
 
+### Operator-declared VM state - the file transport (vm_files)
+
+[`roles/vm_files`](roles/vm_files/) transports operator-declared host files
+onto a provisioned VM. Its input **is** the `files` array of a VM definition,
+reproduced field for field: the estate has spoken that schema since before this
+role existed, so the two entry forms, their sub-field names and their
+validation rules are ported rather than redesigned. A definition a consumer's
+config already carries is valid here unchanged, and is accepted or rejected
+identically whichever engine runs it.
+
+An entry is either **single** (`source`, `target` - one named controller-side
+file to one absolute VM path) or **bulk** (`pattern`, `targetDir`, optional
+`recurse` and `preserveRelativePath` - every file matching an absolute glob,
+under one absolute VM directory), discriminated by the presence of `pattern`.
+Sub-fields are camelCase because they are config keys parsed out of the VM
+definition JSON, not Ansible variables.
+
+Three things are worth knowing at this level:
+
+- **The role validates its own input**, before the first byte crosses the
+  connection. It is a provisioning vector in its own right, not a downstream
+  stage of some other engine's pre-pass, so it cannot assume validation has
+  run. Unknown sub-fields are rejected: a silently-ignored `targetdir` typo
+  would report success and copy nothing, the one failure mode a file transport
+  must never have.
+- **Bulk entries resolve on the controller, at transport time**, because a glob
+  is time-varying and the only resolution still true when the bytes are read is
+  the one the transport is about to act on. The anchor, flatten / preserve and
+  recurse rules are ported from the PowerShell resolver so a pattern names the
+  same files under either engine. Two constructs are refused outright - relative
+  patterns and character classes (`[ab].jar`) - because in both cases the
+  alternative is a *silent* divergence, where one definition copies a different
+  set of files depending on which engine ran it.
+- **Files land root-owned and `0644`** (directories the role creates, `0755`),
+  stated on the task rather than inherited from the source: whatever modes a
+  file carries on the controller are an accident of how it got there, possibly a
+  Windows volume with no POSIX modes at all. The policy lives in `vars/`, not
+  `defaults/`, so a consumer cannot relax it for one host - and the report
+  quotes those same constants, so it cannot describe ownership the role does not
+  enforce.
+
+Transport is `ansible.builtin.copy`, so the bytes travel inside the connection
+the play already has: no listener is opened and nothing is published on the
+network for the duration of a run. Source paths are POSIX and name files on the
+controller - a Windows-hosted estate translates its drive letters *before*
+dispatch, which is what keeps this role free of host-topology knowledge and
+testable in a plain container. The entry contract, the full resolution rule
+table, and what is deliberately left unvalidated are in the
+[role README](roles/vm_files/README.md).
+
 ### Cross-section - the reconciliation report (toolchain_report)
 
 [`roles/toolchain_report`](roles/toolchain_report/) installs nothing. It
@@ -732,6 +795,34 @@ landed). apt packages and the Docker engine are absent by design - dpkg
 owns its own download cache. Sample output, the entry contract, and a
 symptom-to-diagnosis table are in the
 [role README](roles/artifact_report/README.md).
+
+### The file transport report (files_report)
+
+[`roles/files_report`](roles/files_report/) is the third report and the
+terminal consumer of the `files_report_entries` accumulator `vm_files` appends
+to as it transports. A play gets the report by including this role last.
+
+It exists because a bulk entry is one line of config that becomes an unknown
+number of files. An operator reading the config knows a glob was declared; only
+the run knows what it matched, and only the run knows what each match was named
+once `preserveRelativePath` had its say - a target carrying `v1/` where the
+pattern carried `v*` appears nowhere in the config. The PowerShell engine that
+has owned this schema never printed that expansion. So entries are **one per
+file that landed, not per declared entry**.
+
+Its second answer is what a re-run did: `copied` names exactly the files this
+run wrote, `unchanged` the ones already correct. That distinction exists only at
+the moment of the copy, which is why the report is accumulated as the transport
+happens rather than derived afterwards.
+
+Contrast with `artifact_report` is the useful one. That role **probes**, because
+a converged toolchain run short-circuits on a manifest and never touches the
+artifact, so an inferred report would describe a cache from months ago. Nothing
+short-circuits here - every declared file is reconciled on every run - so `copy`
+is authoritative about the file it just wrote, and a `stat` per file would spend
+a round trip per JAR to restate it. Sample output, the entry contract, and why
+an entry's origin is the presence of its `pattern` rather than a field of its
+own are in the [role README](roles/files_report/README.md).
 
 ### Shared report plumbing (report_render)
 
