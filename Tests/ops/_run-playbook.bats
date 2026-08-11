@@ -629,6 +629,7 @@ STUB
     cat >"${TEST_TMP}/stubs/wsl.exe" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$@" > "${TEST_TMP}/wsl-args"
+printf '%s\n' "\${WSLENV}" > "${TEST_TMP}/wsl-env"
 exit 0
 STUB
     chmod +x "${TEST_TMP}/stubs/uname" "${TEST_TMP}/stubs/wsl.exe"
@@ -643,6 +644,42 @@ STUB
     grep -q -- '--check'          "${TEST_TMP}/wsl-args"
     # And nothing ran in the Git Bash process - the siblings never fired.
     [ ! -s "${TRACE_FILE}" ]
+}
+
+@test "Git Bash re-exec forwards every var the far side reads" {
+    # WSLENV is the ONLY channel across the re-exec, so a var this bridge's own
+    # WSL-side steps consult has to be listed or it silently arrives unset.
+    # TIMING_TASKS_OUTPUT_PATH is the one that was missed: _ansible-env.sh gates
+    # the timing_tree callback on it, so without it a Git-Bash-launched timed
+    # run produced a tree with no task rows and no error to explain why.
+    cat >"${TEST_TMP}/stubs/uname" <<'STUB'
+#!/usr/bin/env bash
+if [[ "$1" == "-s" ]]; then echo "MINGW64_NT-10.0-26200"; else exec /usr/bin/uname "$@"; fi
+STUB
+    cat >"${TEST_TMP}/stubs/wsl.exe" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\${WSLENV}" > "${TEST_TMP}/wsl-env"
+exit 0
+STUB
+    chmod +x "${TEST_TMP}/stubs/uname" "${TEST_TMP}/stubs/wsl.exe"
+
+    run "${BASH_BIN}" "${TEST_REPO}/ops/_run-playbook.sh" playbooks/_noop.yml
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/wsl-env" ]
+
+    # Each name the far side reads, asserted individually so a failure says
+    # which one fell out of the list rather than diffing one long string.
+    # This suite loads no bats-assert, so the diagnostic goes to stderr (bats
+    # surfaces it on failure) and the test ends on a plain non-zero return.
+    for name in SECRET_SUFFIX CA_INVENTORY_VAULT CA_EXTRA_VAULTS \
+                CA_NEEDS_HOST_FILE_SERVER CA_HOST_FILE_SERVER_DIR \
+                CA_HOST_FILE_SERVER_VERSION CA_REQUIRES_TOKEN CA_CONSUMER_ROOT \
+                TIMING_TASKS_OUTPUT_PATH GH_TOKEN; do
+        if ! grep -q "${name}" "${TEST_TMP}/wsl-env"; then
+            echo "WSLENV does not forward ${name}: $(cat "${TEST_TMP}/wsl-env")" >&2
+            return 1
+        fi
+    done
 }
 
 @test "tmpdir is removed when a sibling fails mid-pipeline" {
