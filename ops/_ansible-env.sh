@@ -137,9 +137,11 @@ export ANSIBLE_PIPELINING=True
 # flow. Exported always: a search path is inert until a callback is enabled.
 export ANSIBLE_CALLBACK_PLUGINS="${repo_root}/callback_plugins"
 
-# Enable the timing_tree callback ONLY when a per-task rows target is set. The
-# toolchain wrapper (provision-toolchains.sh) sets TIMING_TASKS_OUTPUT_PATH for a
-# timed run and leaves it unset otherwise, so an uninstrumented run pays nothing.
+# Enable the timing_tree callback ONLY when a per-task rows target is set. A
+# consumer's dispatch step sets TIMING_TASKS_OUTPUT_PATH for a timed run and
+# leaves it unset otherwise, so an uninstrumented run pays nothing. The path is
+# always controller-side (/mnt form when the caller was Git Bash), because this
+# is where the callback writes it.
 # Env-gated, so there is deliberately no static `callbacks_enabled` cfg key - the
 # asymmetry is documented in ../ansible.cfg. timing_tree is an aggregate
 # callback: it runs ALONGSIDE the default stdout callback, and self-gates on the
