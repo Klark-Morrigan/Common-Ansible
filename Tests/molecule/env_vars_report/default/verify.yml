@@ -55,6 +55,45 @@
           the report did not render the seeded entry set:
           {{ env_vars_report_lines | default('<no lines>') }}
 
+    # A block whose variables do not all live in one file. `target` is a
+    # property of the ENTRY in the contract, so this shape is legal;
+    # today's only producer fixes its target to a constant, so it is not
+    # a shape that producer emits. That is why it is a minimal mutation
+    # of the seeded set rather than a fixture of its own - and why it is
+    # tested at all, since an untested heading that silently reported one
+    # of two files would name the wrong file to go and edit.
+    #
+    # It is a different case from a mixed status inside one group, which
+    # is deliberately NOT seeded anywhere: that one the mechanism cannot
+    # produce, because the block is written or left alone as a unit.
+    - name: Move one variable of a block into a second file
+      ansible.builtin.set_fact:
+        two_target_entries: >-
+          {{ [env_vars_report_entries[0]
+              | combine({'target': '/etc/environment.d/ci.conf'})]
+             + env_vars_report_entries[1:] }}
+
+    - name: Re-render the report with one block spanning two files
+      ansible.builtin.include_role:
+        name: env_vars_report
+      vars:
+        env_vars_report_entries: "{{ two_target_entries }}"
+
+    # Only the heading is asserted: everything else about this rendering
+    # is the mixed case's expectation, and restating it here would be two
+    # copies of one claim that can disagree.
+    - name: Assert the group heading names every file its variables landed in
+      vars:
+        expected_heading: >-
+          block ci-jars -- 3 declared in
+          /etc/environment.d/ci.conf, /etc/environment
+      ansible.builtin.assert:
+        that:
+          - ('  ' ~ expected_heading) in env_vars_report_lines
+        fail_msg: >-
+          the group heading did not name both files:
+          {{ env_vars_report_lines }}
+
     # A host carrying one block - the common shape, since a second
     # consumer declaring variables on the same VM is the exception. The
     # absent block's group must simply not be there: an empty heading

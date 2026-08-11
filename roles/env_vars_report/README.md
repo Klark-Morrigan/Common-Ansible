@@ -203,11 +203,20 @@ through molecule inventory vars and asserts the rendered
 | A value carrying a quote and a backslash | The report prints the value as declared; the `\"` and `\\` the file's own line carries appear nowhere |
 | A value with surrounding whitespace | The quotes make it visible, which is what stops the one wrong value that would otherwise render identically to the right one |
 | Declaration order within a group | Rows keep accumulator order, so a group reads against the config it came from line by line |
+| A block spanning two files | The heading names both rather than reporting one of them - legal under the contract, since `target` is per entry, though today's only producer fixes it to a constant |
 | One block only | The other group is **absent**, not an empty heading - which would read as a declaration that lost its variables |
 | No entries at all | Reads as "nothing was declared" rather than as an empty heading |
 
-The last two render subsets of the same seeded set rather than second
-fixtures, so a case cannot drift away from the mixed one it is cut from.
+Every case after the first renders a subset or a minimal mutation of the
+same seeded set rather than a second fixture, so a case cannot drift away
+from the mixed one it is cut from.
+
+One shape is deliberately **not** seeded: a mixed status inside one group.
+The mechanism cannot produce it - the block is written or left alone as a
+unit - so a fixture carrying one would be testing a report of something
+that cannot happen. That is what separates it from the two-file case
+above, which the contract permits and only today's producer declines to
+emit.
 
 Seeding through inventory (rather than in `converge.yml`) is what lets
 `verify.yml` re-render from the same source: facts set during converge do
