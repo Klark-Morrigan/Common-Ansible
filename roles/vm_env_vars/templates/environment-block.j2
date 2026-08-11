@@ -1,0 +1,20 @@
+{#
+  The managed block's CONTENT - the assignment lines only, never the
+  sentinel markers. blockinfile owns the markers, and keeping them out of
+  here is what lets the marker spelling live in one place (vars/main.yml)
+  alongside the compatibility note explaining why it is what it is.
+
+  Escape backslash FIRST, then double-quote. The order is the whole
+  correctness of this line: escaping backslash second would re-escape the
+  backslashes just emitted to escape the quotes, so a value containing "
+  would come back out carrying a stray \. Both pam_env and systemd's
+  EnvironmentFile parser read "..." with exactly these two escapes, which
+  is why they are the two that are applied and the only two.
+
+  Rendered by a lookup() in tasks/main.yml rather than by a `template`
+  module, because the text is an input to blockinfile rather than a file
+  of its own.
+#}
+{% for entry in vm_env_vars_entries %}
+{{ entry.name }}="{{ entry.value | replace('\\', '\\\\') | replace('"', '\\"') }}"
+{% endfor %}

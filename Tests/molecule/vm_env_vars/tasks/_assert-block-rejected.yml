@@ -1,0 +1,56 @@
+---
+# Applies the vm_env_vars role to ONE declaration the role has to refuse,
+# and asserts it does, exercising the real role rather than a copy of its
+# rules.
+#
+# Lives in its own file because `loop` is not a valid attribute on a
+# block - the caller loops over an include of this file instead.
+#
+# Caller contract:
+#   vm_env_vars_case.name        what the case is called in failure output.
+#   vm_env_vars_case.block_name  the value to feed vm_env_vars_block_name;
+#                                defaults to the scenario's valid one, so
+#                                a case mutating only the entries does not
+#                                have to restate it.
+#   vm_env_vars_case.entries     the value to feed vm_env_vars_entries.
+#   vm_env_vars_case.expect      fragments the rejection must contain - the
+#                                rule that was violated, and where relevant
+#                                the position of the offending entry.
+
+- name: Assert the declared block is rejected
+  vars:
+    vm_env_vars_block_name: >-
+      {{ vm_env_vars_case.block_name | default(valid_block_name) }}
+    vm_env_vars_entries: "{{ vm_env_vars_case.entries }}"
+  block:
+    - name: Apply the role with the malformed declaration
+      ansible.builtin.include_role:
+        name: vm_env_vars
+
+    # Reached only when no assert in the role fired, which is the
+    # regression this whole file exists to catch.
+    - name: Fail if the role accepted the declaration
+      ansible.builtin.fail:
+        msg: >-
+          vm_env_vars accepted the case
+          '{{ vm_env_vars_case.name }}': {{ vm_env_vars_case.entries }}
+  rescue:
+    # Distinguish "rejected for the right reason" from any other failure -
+    # a role that broke for an unrelated reason would otherwise look like
+    # a passing test, and so would one whose messages stopped naming the
+    # entry an operator has to go and fix.
+    #
+    # Searched over the whole serialized result rather than .msg: the
+    # per-entry rules run under a `loop`, so the top-level msg can be only
+    # "One or more items failed" with the real diagnostic in
+    # .results[].msg. Matching the JSON covers both shapes.
+    - name: Confirm the rejection named the violated rule
+      vars:
+        vm_env_vars_case_result: "{{ ansible_failed_result | default({}) | to_json }}"
+      ansible.builtin.assert:
+        that:
+          - item in vm_env_vars_case_result
+        fail_msg: >-
+          Case '{{ vm_env_vars_case.name }}' was rejected, but the failure
+          does not mention '{{ item }}': {{ vm_env_vars_case_result }}
+      loop: "{{ vm_env_vars_case.expect }}"

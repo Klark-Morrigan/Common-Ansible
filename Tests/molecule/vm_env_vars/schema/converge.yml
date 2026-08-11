@@ -1,0 +1,41 @@
+---
+# Converge - the positive control: a well-formed declaration using every
+# character the block name permits and every shape a value may take is
+# accepted.
+#
+# It is the half of a strictness test that is easy to lose. A validator
+# that rejected everything would still satisfy the rejection matrix in
+# verify.yml, so something has to prove the contract still admits the
+# declarations the estate actually writes.
+#
+# include_role (not import_role) defers resolution to runtime so the
+# molecule.yml ANSIBLE_ROLES_PATH override is honoured.
+
+- name: Converge - accept a well-formed vm_env_vars declaration
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: vm_env_vars
+      vars:
+        # Every character class the block name rule permits, in one name:
+        # letters, digits, a dot, a space and a dash. Underscore is NOT
+        # among them - the name lands in a shell-embedded marker, and the
+        # permitted set is the ported one rather than a superset chosen
+        # here - so a converge using one would be asserting the wrong
+        # contract.
+        vm_env_vars_block_name: ci-jars.v1 alpha
+        vm_env_vars_entries:
+          - name: STARSECTOR_HOME
+            value: /opt/ci-jars/starsector
+          # A leading underscore and digits, which the POSIX identifier
+          # rule permits and a naive "letters only" reading would not.
+          - name: _CI_JARS_2
+            value: "2"
+          # Both escaped characters together, plus surrounding
+          # whitespace inside the value - legal, because the quotes carry
+          # it, and distinct from whitespace around the BLOCK NAME, which
+          # is not.
+          - name: CI_JARS_OPTS
+            value: '  a "quoted" \ backslash  '

@@ -1,0 +1,25 @@
+---
+# Prepare - seed the file the converge has to edit around.
+#
+# The seed is deliberately not empty and not only distribution content.
+# Every line in it is a line the role must leave exactly as it found it,
+# and one of them is a rival consumer's managed block - the case that
+# decides whether "managed block" means this role's block or every block
+# in the file.
+#
+# It is also planted with the WRONG ownership and mode. The role states
+# root:root 0644 on its write, so a seed that already matched would prove
+# nothing about whether the policy is applied or merely inherited.
+
+- name: Prepare - seed the environment file the role will edit
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Write the pre-existing environment file content
+      ansible.builtin.copy:
+        dest: "{{ target_file }}"
+        content: "{{ surrounding_text }}"
+        owner: nobody
+        group: nogroup
+        mode: "0600"
+      become: true

@@ -1,0 +1,63 @@
+---
+# Internal vars for the vm_env_vars role. Not part of the input contract -
+# defaults/main.yml owns that. These live in vars/ (not defaults/)
+# precisely so a caller cannot override them: the schema rules and the
+# file policy ARE the contract, so a consumer relaxing one locally would
+# fork it for every other host.
+
+# The strict allow-list driving the unknown-sub-field rejection. Named
+# rather than inlined so a rejection message can print the permitted set
+# back to the operator from the very source it was validated against.
+vm_env_vars_allowed_fields:
+  - name
+  - value
+
+# POSIX identifier syntax. Ported from the PowerShell validator so a
+# definition is accepted or rejected identically whichever engine runs it.
+# It is also what makes the rendered NAME="value" line safe: a name that
+# matches this cannot contain '=', whitespace, a quote or a marker's '#'.
+vm_env_vars_name_regex: '^[A-Za-z_][A-Za-z0-9_]*$'
+
+# The safe subset for the sentinel marker. Both engines embed the block
+# name in a marker line, and the PowerShell one embeds it in a
+# single-quoted bash assignment - so a quote, a newline or a NUL would
+# either close that quoting early or split the marker across lines.
+vm_env_vars_block_name_regex: '^[A-Za-z0-9._ -]+$'
+vm_env_vars_block_name_max_length: 128
+
+# The characters a value may not carry, each named by what it would do to
+# the file rather than by its escape. /etc/environment is line-oriented,
+# so a newline or carriage return turns one entry into two lines - the
+# second of which is not a valid assignment - and a NUL truncates the
+# line at whichever layer reads it first.
+vm_env_vars_forbidden_value_chars:
+  - char: "\n"
+    label: a newline (LF)
+  - char: "\r"
+    label: a carriage return (CR)
+  - char: "\x00"
+    label: a NUL byte
+
+# The file policy - which file the block lives in, and what it is left
+# owned by. Fixed rather than configurable because the target is the whole
+# point: /etc/environment is the one file both pam_env (login sessions)
+# and a systemd unit's EnvironmentFile= can be pointed at, which is what
+# lets one declaration serve both.
+#
+# root:root 0644 is stated on the write rather than inherited, and matches
+# what the PowerShell transport's atomic write applies, so the two engines
+# leave the file in the same state. World-readable is the file's existing
+# posture, not a choice made here - see the role README, Security.
+vm_env_vars_target: /etc/environment
+vm_env_vars_target_owner: root
+vm_env_vars_target_group: root
+vm_env_vars_target_mode: "0644"
+
+# The sentinel markers, spelled to be byte-identical with the PowerShell
+# transport's: '# BEGIN <name>' / '# END <name>'. That equality is the
+# whole compatibility contract between the two engines - each recognises
+# and replaces the other's block instead of appending a second one - and
+# both parsers that read the file treat a leading '#' as a comment.
+vm_env_vars_marker: "# {mark} {{ vm_env_vars_block_name }}"
+vm_env_vars_marker_begin: BEGIN
+vm_env_vars_marker_end: END

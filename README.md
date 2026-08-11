@@ -32,6 +32,7 @@ was extended by the feature step that earned it.
   - [Section 3 - base-image daemons](#section-3---base-image-daemons)
     - [Docker daemon (docker)](#docker-daemon-docker)
   - [Operator-declared VM state - the file transport (vm_files)](#operator-declared-vm-state---the-file-transport-vm_files)
+  - [Operator-declared VM state - the environment block (vm_env_vars)](#operator-declared-vm-state---the-environment-block-vm_env_vars)
   - [Cross-section - the reconciliation report (toolchain_report)](#cross-section---the-reconciliation-report-toolchain_report)
   - [Cross-section - the artifact report (artifact_report)](#cross-section---the-artifact-report-artifact_report)
   - [The file transport report (files_report)](#the-file-transport-report-files_report)
@@ -732,6 +733,57 @@ dispatch, which is what keeps this role free of host-topology knowledge and
 testable in a plain container. The entry contract, the full resolution rule
 table, and what is deliberately left unvalidated are in the
 [role README](roles/vm_files/README.md).
+
+### Operator-declared VM state - the environment block (vm_env_vars)
+
+[`roles/vm_env_vars`](roles/vm_env_vars/) is the peer of `vm_files` and the
+other half of "what an operator declared for this VM": one role moves the
+payload, this one moves the variables that let the VM find it. Its input **is**
+the `envVars` object of a VM definition - a `blockName` plus a list of
+`name` / `value` entries - ported field for field from the same PowerShell
+engine, on the same terms.
+
+It reconciles a sentinel-delimited **managed block** inside `/etc/environment`:
+
+```ini
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# BEGIN ci-jars
+STARSECTOR_HOME="/opt/ci-jars/starsector"
+# END ci-jars
+```
+
+Three things are worth knowing at this level:
+
+- **The role owns the lines between its markers and nothing else.** The
+  distribution's own `PATH`, operator additions and *another consumer's block*
+  survive byte for byte. That is what the per-consumer block name buys: a single
+  shared sentinel would let the last writer wipe every other consumer's keys.
+- **There are three states, not two.** Both vars unset is a no-op, so a play can
+  always include the role. A block name with an **empty** entry list is not the
+  same thing - it is the retraction intent, "remove this block", which is how a
+  variable is taken back off a host. Entries *without* a block name is an error
+  rather than a no-op, because there is no defensible default for the markers and
+  treating it as one would turn a missing `blockName` into a run that reported
+  success and wrote nothing.
+- **The markers and the rendered lines are byte-compatible with the PowerShell
+  engine**, which still writes the same block on the same hosts. Each engine
+  therefore finds and replaces the other's block instead of appending a second
+  one. Position is the one thing that differs - the PowerShell transport
+  re-appends at end of file, `blockinfile` replaces in place - which is a
+  migration, not a conflict.
+
+Values render as `NAME="value"`, escaping backslash **before** double-quote:
+escaping it after would re-escape the backslashes just emitted for the quotes.
+Both parsers that read this file - `pam_env` and systemd's `EnvironmentFile=` -
+read `"..."` with exactly those two escapes.
+
+The target is fixed rather than configurable, and that is the point:
+`/etc/environment` is the one file both `pam_env` (login sessions) and a systemd
+unit's `EnvironmentFile=` can be pointed at, so one declaration serves both. A
+unit does **not** read it on its own; wiring a drop-in belongs to the repo that
+owns the unit. The file is world-readable, so nothing secret belongs in a VM's
+`envVars`. The full contract, the compatibility rules and the security notes are
+in the [role README](roles/vm_env_vars/README.md).
 
 ### Cross-section - the reconciliation report (toolchain_report)
 

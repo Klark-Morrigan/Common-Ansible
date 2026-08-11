@@ -1,0 +1,201 @@
+---
+# Verify - the rejection matrix: one case per schema rule, each a minimal
+# mutation of a shape the converge accepts.
+#
+# Every case asserts two things at once. That the rule fired at all, and
+# that the message an operator will read names the rule they broke -
+# because a validator whose diagnostics are unreadable costs more than the
+# typo it caught.
+#
+# Cases run against the role itself through
+# ../tasks/_assert-block-rejected.yml; nothing here re-implements a rule,
+# so the matrix cannot drift into agreeing with a broken role.
+
+- name: Verify - every malformed vm_env_vars declaration is rejected
+  hosts: all
+  gather_facts: false
+  vars:
+    # The entry set every block-name case carries. Non-empty on purpose:
+    # an empty one is the legal "remove the block" intent, which would
+    # take a different path through the role and prove nothing about the
+    # name.
+    valid_entries:
+      - name: STARSECTOR_HOME
+        value: /opt/ci-jars/starsector
+
+    vm_env_vars_cases:
+      # The block name, which is what tells this consumer's lines apart
+      # from every other line in the file.
+      # A CONTAINER, not a number. A scalar reaches the role as a string
+      # whatever the config wrote - Ansible converts a rendered template
+      # back to a native type only when it looks like a list or a dict -
+      # so a container is the only shape that can still be non-string by
+      # the time the rule sees it, and refusing it is the rule's real job.
+      - name: block name is not a string
+        block_name: [ci-jars]
+        entries: "{{ valid_entries }}"
+        expect:
+          - "must be a string"
+
+      - name: block name is empty while entries are declared
+        block_name: ""
+        entries: "{{ valid_entries }}"
+        expect:
+          - "cannot be written without the name"
+
+      - name: block name is over the length limit
+        block_name: "{{ 'c' * 129 }}"
+        entries: "{{ valid_entries }}"
+        expect:
+          - "over the 128-character limit"
+
+      - name: block name has a disallowed character
+        block_name: "ci#jars"
+        entries: "{{ valid_entries }}"
+        expect:
+          - "contains a disallowed character"
+
+      # A space is a permitted CHARACTER, so this case gets past the rule
+      # above and reaches the one that exists for it. Refused rather than
+      # trimmed, because the marker is matched literally on every later
+      # run.
+      - name: block name has surrounding whitespace
+        block_name: " ci-jars"
+        entries: "{{ valid_entries }}"
+        expect:
+          - "must not start or end with whitespace"
+
+      # The container of the entries, before any entry is looked at. A
+      # bare mapping and a bare string are the two ways an operator drops
+      # the enclosing list.
+      - name: entries are a bare string
+        entries: "STARSECTOR_HOME"
+        expect:
+          - "must be a list of name / value entries"
+
+      - name: entries are a bare mapping
+        entries: {name: STARSECTOR_HOME, value: /opt/ci-jars/starsector}
+        expect:
+          - "must be a list of name / value entries"
+
+      - name: entry is not a mapping
+        entries:
+          - "STARSECTOR_HOME=/opt/ci-jars/starsector"
+        expect:
+          - "must be a mapping"
+          - "vm_env_vars_entries[0]"
+
+      # A null element is what a trailing comma or a commented-out entry
+      # leaves behind in a hand-edited definition, and it reaches the
+      # rules as a shape no sub-field check can be run against.
+      - name: entry is null
+        entries:
+          - ~
+        expect:
+          - "must be a mapping"
+          - "vm_env_vars_entries[0]"
+
+      - name: entry has an unknown sub-field
+        entries:
+          - name: STARSECTOR_HOME
+            value: /opt/ci-jars/starsector
+            default: /opt/fallback
+        expect:
+          - "unknown sub-field(s) 'default'"
+
+      - name: entry is missing name
+        entries:
+          - value: /opt/ci-jars/starsector
+        expect:
+          - "missing a required sub-field"
+
+      - name: entry is missing value
+        entries:
+          - name: STARSECTOR_HOME
+        expect:
+          - "missing a required sub-field"
+
+      - name: entry name starts with a digit
+        entries:
+          - name: 2FAST
+            value: /opt/ci-jars/starsector
+        expect:
+          - "is not a POSIX identifier"
+
+      # The mistake the rule's message calls out by name: a whole
+      # assignment pasted into the name field.
+      - name: entry name carries a whole assignment
+        entries:
+          - name: STARSECTOR_HOME=/opt/ci-jars/starsector
+            value: /opt/ci-jars/starsector
+        expect:
+          - "is not a POSIX identifier"
+
+      - name: entry name is not a string
+        entries:
+          - name: 21
+            value: /opt/ci-jars/starsector
+        expect:
+          - "is not a POSIX identifier"
+
+      # Empty is refused rather than written as NAME="": a variable an
+      # operator wants unset is retracted by dropping the entry.
+      - name: entry value is empty
+        entries:
+          - name: STARSECTOR_HOME
+            value: ""
+        expect:
+          - "must be a non-empty string"
+
+      # A number is what an unquoted port or version becomes in hand-
+      # edited YAML, and it must not pass as the string it resembles.
+      - name: entry value is not a string
+        entries:
+          - name: STARSECTOR_PORT
+            value: 7777
+        expect:
+          - "must be a non-empty string"
+
+      # The characters that would split one entry across two lines. The
+      # second line is not a valid assignment, so the failure would show
+      # up at whatever reads the file rather than here.
+      - name: entry value contains a newline
+        entries:
+          - name: STARSECTOR_HOME
+            value: "/opt/ci-jars\n/opt/other"
+        expect:
+          - "a newline (LF)"
+
+      - name: entry value contains a carriage return
+        entries:
+          - name: STARSECTOR_HOME
+            value: "/opt/ci-jars\r"
+        expect:
+          - "a carriage return (CR)"
+
+      - name: two entries declare the same name
+        entries:
+          - name: STARSECTOR_HOME
+            value: /opt/ci-jars/starsector
+          - name: STARSECTOR_HOME
+            value: /opt/ci-jars/starsector-next
+        expect:
+          - "declares the same name more than once"
+
+      # A well-formed entry ahead of the broken one, so the reported
+      # position is the offending entry's rather than the first entry's.
+      - name: rejection names the offending entry's position
+        entries:
+          - name: STARSECTOR_HOME
+            value: /opt/ci-jars/starsector
+          - name: 2FAST
+            value: /opt/ci-jars/extra
+        expect:
+          - "vm_env_vars_entries[1]"
+  tasks:
+    - name: Assert each malformed declaration is rejected
+      ansible.builtin.include_tasks: ../tasks/_assert-block-rejected.yml
+      loop: "{{ vm_env_vars_cases }}"
+      loop_control:
+        loop_var: vm_env_vars_case
+        label: "{{ vm_env_vars_case.name }}"

@@ -1,0 +1,54 @@
+---
+# Defaults and the input contract for the vm_env_vars role.
+#
+# The role owns the operator-declared system-wide environment variables
+# of a provisioned VM. Its input IS the `envVars` object of a VM
+# definition, reproduced field for field: the estate already speaks this
+# schema (a PowerShell engine has owned it since before this role
+# existed), so the sub-field names and their validation rules are ported
+# rather than redesigned. A definition a consumer's config already
+# carries is valid here unchanged.
+#
+# Peer of vm_files, and deliberately shaped like it - the two roles are
+# the two halves of "what an operator declared for this VM": one moves
+# payload, this one moves the variables that let the VM find it.
+#
+# Required input: none. With the empty defaults the role is a no-op, so a
+# play can always include it and let config decide whether this host
+# declares anything.
+#
+# vm_env_vars_block_name - the name embedded in the BEGIN / END sentinel
+#   markers that delimit this consumer's managed block inside
+#   /etc/environment. Supplied per call so two unrelated consumers can
+#   maintain their own blocks in one file without colliding; a single
+#   shared sentinel would let the last writer wipe every other
+#   consumer's keys. 1-128 chars, matching ^[A-Za-z0-9._ -]+$, with no
+#   leading or trailing whitespace - the safe subset for a marker line
+#   that both this engine and the PowerShell one embed in shell.
+#
+# vm_env_vars_entries - the desired variables, as a list of:
+#
+#     name   (required) the variable name. A POSIX identifier
+#                       (^[A-Za-z_][A-Za-z0-9_]*$), which is also what
+#                       makes a rendered NAME="value" line unable to
+#                       collide with anything the parsers below treat
+#                       specially.
+#     value  (required) the variable's value, a non-empty string
+#                       carrying no newline, carriage return or NUL.
+#                       Those three are the characters that would split
+#                       one entry into two lines, or truncate it.
+#
+# Sub-fields are camelCase-free here only because both happen to be
+# single words; they are config keys parsed out of the VM definition
+# JSON, not Ansible variables, exactly as in vm_files.
+#
+# Names must be unique across entries: two entries writing one key is an
+# operator intent that cannot be honoured, and silently keeping the last
+# would mask it.
+#
+# An EMPTY entries list is not the same as no input. Paired with a block
+# name it means "remove the managed block", which is how an operator
+# retracts a variable - the same intent the PowerShell transport honours.
+# The role is a no-op only when neither field is set.
+vm_env_vars_block_name: ""
+vm_env_vars_entries: []

@@ -1,0 +1,67 @@
+---
+# Converge - write the declared block into the seeded environment file.
+#
+# Also what `molecule idempotence` re-runs, so it is this play that has to
+# report changed=0 against a host whose block is already correct.
+#
+# include_role (not import_role) defers resolution to runtime so the
+# molecule.yml ANSIBLE_ROLES_PATH override is honoured.
+
+- name: Converge - reconcile the declared environment block
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Include the role under test
+      ansible.builtin.include_role:
+        name: vm_env_vars
+      vars:
+        vm_env_vars_block_name: "{{ block_name }}"
+        vm_env_vars_entries: "{{ fixture_entries }}"
+
+    # The role's standing promise is that a play can include it
+    # unconditionally and let config decide whether this host declares
+    # anything. That is a claim about BOTH fields being unset - the
+    # empty entry list on its own means "remove the block", which is a
+    # write - so it is exercised here rather than left to the first
+    # consumer to discover.
+    - name: Include the role under test with nothing declared
+      ansible.builtin.include_role:
+        name: vm_env_vars
+
+    # The report accumulator is asserted HERE rather than in verify.yml
+    # because it is a fact, and molecule's verifier is a separate
+    # ansible-playbook run that cannot see one.
+    #
+    # Status is asserted as a DOMAIN rather than as a value: `molecule
+    # idempotence` re-runs this converge against a host whose block is
+    # already correct, where every entry is `unchanged`, so pinning
+    # `written` would pass on the first pass and fail on the second.
+    - name: Assert the reconcile recorded every declared variable
+      ansible.builtin.assert:
+        that:
+          # One entry per declared variable, and the no-op include above
+          # contributed none - the other half of the promise that an
+          # unset role is a no-op.
+          - env_vars_report_entries | length == fixture_entries | length
+          - >-
+            env_vars_report_entries | map(attribute='name') | list
+            == fixture_entries | map(attribute='name') | list
+          # The value as DECLARED, not as escaped into the file: what an
+          # operator confirms off the report is what a process reads back.
+          - >-
+            env_vars_report_entries | map(attribute='value') | list
+            == fixture_entries | map(attribute='value') | list
+          - >-
+            env_vars_report_entries | map(attribute='block') | unique | list
+            == [block_name]
+          - >-
+            env_vars_report_entries | map(attribute='target') | unique | list
+            == [target_file]
+          - >-
+            env_vars_report_entries
+            | rejectattr('status', 'in', ['written', 'unchanged'])
+            | list | length == 0
+        fail_msg: >-
+          the environment variables report accumulator does not describe
+          the reconcile:
+          {{ env_vars_report_entries | default('<unset>') }}
