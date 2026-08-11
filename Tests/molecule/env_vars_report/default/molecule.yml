@@ -1,0 +1,113 @@
+---
+# Molecule scenario for the env_vars_report role - render a representative
+# entry set and assert the resulting text.
+#
+# The entry set is seeded through inventory host_vars rather than in
+# converge.yml on purpose: molecule's ansible verifier runs a SEPARATE
+# ansible-playbook invocation, so facts set during converge are gone by
+# verify time. An inventory var is visible to both plays, which lets
+# verify.yml re-render from the same single source and assert on it.
+#
+# It covers, in one host: two managed blocks (so the grouping is grouping
+# and not one block with a heading), both statuses, a value carrying both
+# characters the file's own lines escape, and a value with surrounding
+# whitespace.
+#
+# verify.yml re-renders subsets of this same set for the cases a mixed one
+# cannot state: a host carrying a single block, and a host with nothing
+# declared at all.
+#
+# What the accumulator looks like when vm_env_vars really produces it is
+# asserted in that role's default scenario converge instead - see it. This
+# scenario is about the rendering, which is why it seeds entries directly
+# rather than reconciling a block to generate them.
+#
+# Single Ubuntu 24.04 container, Docker driver, ansible verifier. The role
+# only templates and sets a fact - it touches nothing on the target - but
+# the scenario still runs against the shared base image so it matches every
+# other scenario in the repo rather than introducing a delegated-driver
+# special case.
+#
+# Image: reuses the toolchain_host_push base (python3 + sudo on
+# ubuntu:24.04). No custom Dockerfile - build it via the command in
+# Tests/molecule/toolchain_host_push/Dockerfile.
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: instance
+    image: common-ansible/toolchain-host-push-base:24.04
+    pre_build_image: true
+    command: /bin/sleep infinity
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  env:
+    # ANSIBLE_ROLES_PATH (env) wins over ansible.cfg's roles_path and
+    # propagates across every molecule phase. MOLECULE_PROJECT_DIRECTORY
+    # is the scenario dir; three levels up is the repo root, then roles/.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../../roles"
+  config_options:
+    defaults:
+      stdout_callback: yaml
+      callbacks_enabled: profile_tasks
+  inventory:
+    host_vars:
+      instance:
+        ansible_user: root
+
+        # Statuses vary ACROSS the two blocks and are uniform WITHIN each,
+        # which is the only shape the producer can emit: a block is
+        # written or left alone as a unit, so every entry from one
+        # reconcile shares its status. Seeding a mixed status inside one
+        # group would test a report of something that cannot happen.
+        #
+        # Declared in the order they were declared to the producer, which
+        # the template must preserve within a group. The blocks are listed
+        # here in the order an operator would have written them; groupby
+        # sorts the groups, so the rendering deliberately does not match
+        # this order at the block level.
+        env_vars_report_entries:
+          # First block, written by this run.
+          - block: ci-jars
+            name: STARSECTOR_HOME
+            value: /opt/ci-jars/starsector
+            target: /etc/environment
+            status: written
+          # A value carrying both characters the file's own lines escape.
+          # It must appear here exactly as declared - a report showing
+          # \" and \\ would be describing the file rather than the value a
+          # process reads back.
+          - block: ci-jars
+            name: CI_JARS_OPTS
+            value: 'a "quoted" \ backslash'
+            target: /etc/environment
+            status: written
+          # Whitespace at both ends of a value. Without the quotes around
+          # the rendered value this row is indistinguishable from a
+          # correct one, which is the whole reason the quotes are there.
+          - block: ci-jars
+            name: CI_JARS_PADDED
+            value: '  padded  '
+            target: /etc/environment
+            status: written
+          # A second consumer's block on the same host, already current.
+          # It is what makes the grouping load-bearing: without it a
+          # single heading and a flat list would render identically.
+          - block: app-runtime
+            name: APP_HOME
+            value: /opt/app
+            target: /etc/environment
+            status: unchanged
+
+verifier:
+  name: ansible

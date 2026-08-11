@@ -183,10 +183,14 @@ Recording is its own task file rather than part of the write because it is
 a different concern: what the host carries, and what an operator is told
 about it.
 
-> **TODO** - no role renders this accumulator yet. `vm_files` closes its
-> flow with [`files_report`](../files_report/README.md); the peer for this
-> one is not built, so today the accumulator is readable as a fact but is
-> not printed. The renderer belongs with the flow that consumes it.
+The accumulator is rendered by
+[`env_vars_report`](../env_vars_report/README.md), the peer of
+[`files_report`](../files_report/README.md): a play closes by including
+it, and the operator gets one block per host grouped by managed block
+name. This role never prints anything itself - what the host carries and
+what an operator is told about it stay separate concerns, which is what
+lets a play include the reporter once after every role that reconciles a
+block.
 
 ## Security
 
@@ -245,6 +249,7 @@ than merely inherited.
 | Block replacement | A value changes, a variable is **dropped** and one is added - all under one block name, with the surroundings intact | verify |
 | Retraction | An empty entry list removes the block, leaving the file byte-identical to its seed | verify |
 | No environment file at all | The write creates it `root:root 0644` holding just the block; the retraction leaves it **absent** rather than manufacturing an empty one | verify |
+| The report renders the accumulator | Producer and report template meet on data a real reconcile produced, so a field this role stopped emitting fails here rather than in front of an operator | converge |
 
 The mutating cases run in `verify.yml` because it runs after
 `idempotence`; folding them into the converge would make the converge

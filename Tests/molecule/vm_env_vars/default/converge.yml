@@ -83,3 +83,37 @@
           the environment variables report accumulator does not describe
           the reconcile:
           {{ env_vars_report_entries | default('<unset>') }}
+
+    # Render what the reconcile just accumulated, which is the one place
+    # producer and template meet on real data: Tests/molecule/env_vars_report
+    # seeds its entries by hand, so a field vm_env_vars stopped emitting
+    # would pass there and surface only in front of an operator. The
+    # rendering itself is asserted in that scenario - failing HERE means
+    # the two halves of the contract no longer fit together.
+    - name: Render the report from the accumulator the reconcile produced
+      ansible.builtin.include_role:
+        name: env_vars_report
+
+    # One claim about the rendering, made here because this is the only
+    # fixture that can make it: these values went through the escaping
+    # renderer on their way into the file, and the report has to show what
+    # was DECLARED - a row carrying \" or \\ would be describing the file
+    # rather than the value a process reads back.
+    #
+    # The status column is read off the accumulator rather than pinned,
+    # for the reason the assertions above give: `molecule idempotence`
+    # re-runs this converge against a host whose block is already correct.
+    - name: Assert every declared variable renders with its declared value
+      vars:
+        expected_row: >-
+          {{ '    ' ~ ('%-9s' | format(env_vars_report_entries[0].status))
+             ~ ' ' ~ item.name ~ "='" ~ item.value ~ "'" }}
+      ansible.builtin.assert:
+        that:
+          - expected_row in env_vars_report_lines
+        fail_msg: >-
+          '{{ item.name }}' did not render as declared:
+          {{ env_vars_report_lines }}
+      loop: "{{ fixture_entries }}"
+      loop_control:
+        label: "{{ item.name }}"

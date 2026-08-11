@@ -1,0 +1,73 @@
+---
+# Defaults and the input contract for the env_vars_report role.
+#
+# This role writes nothing. It is the terminal consumer of the play-wide
+# `env_vars_report_entries` accumulator that vm_env_vars appends to as it
+# reconciles, and it renders one block per host answering the question the
+# per-task PLAY output cannot: which environment variables does this VM
+# carry because config asked for them, which managed block did each come
+# from, and did THIS run write them.
+#
+# Why it is worth a report at all: a variable is invisible in a way a
+# transported file is not. A file can be confirmed with `ls`; a variable
+# is observable only from inside a process that inherited it, and what an
+# operator wants to confirm is the value such a process reads back - not
+# the escaped line the file happens to hold. The report is where a
+# declared variable becomes checkable without opening a session on the VM
+# and echoing it.
+#
+# Why an accumulator rather than a terminal scan of the file: a scan sees
+# the same lines whether this run wrote them or found them already
+# correct, and that distinction - "did my edit actually reach this host" -
+# is knowable only at the moment of the write. A scan also cannot say
+# which lines config asked for, since the file holds the distribution's
+# own PATH, operator additions and other consumers' managed blocks
+# alongside this one's.
+#
+# Why no residency probe (unlike artifact_report): `blockinfile` is
+# authoritative about the block it just wrote. The probe there exists
+# because a converged toolchain run short-circuits on a manifest and never
+# touches the artifact, so the report would otherwise describe a cache
+# from months ago. Nothing here short-circuits - the block is reconciled
+# on every run - so re-reading the file would restate what the write
+# already returned.
+#
+# The accumulator name carries no role prefix on purpose: it is a
+# cross-role contract, like files_report_entries, written by vm_env_vars
+# and read by this role. That is why the producing append task carries
+# `# noqa: var-naming[no-role-prefix]` - the rule assumes a var set inside
+# a role belongs to that role, which is exactly what this one does not do.
+# Documented here, once, rather than at the append site.
+#
+# env_vars_report_entries - appended by vm_env_vars, never set by an
+# operator. One entry per DECLARED variable. Each entry:
+#
+#   block   (required) The managed block the variable was declared in -
+#                      the name its BEGIN / END sentinels carry. A host
+#                      may carry several consumers' blocks in one file,
+#                      so this is what says which declaration to go and
+#                      edit.
+#   name    (required) The variable name, as declared.
+#   value   (required) The value as DECLARED, not as escaped into the
+#                      file. The escaping is an artefact of the file
+#                      format; the value a process reads back is the one
+#                      an operator came to confirm.
+#   target  (required) Absolute path of the file the block lives in, on
+#                      the VM. Quoted from the producing role's own target
+#                      constant, so the report cannot name a file the role
+#                      does not write.
+#   status  (required) written (this run wrote the block) | unchanged (the
+#                      block was already current, so the run touched
+#                      nothing).
+#
+# Status is a property of the BLOCK rather than of the variable: the block
+# is written or left alone as a unit, in one atomic move, so every entry
+# from one run shares its value. That is stated rather than hidden -
+# there is no per-variable change detection to be had here, and inventing
+# one would be a report claiming precision the mechanism does not have.
+#
+# The report groups by block because that is the unit an operator acts on.
+# A wrong value is fixed by editing the declaration the block came from,
+# and a status applies to the whole group, so a per-variable listing would
+# repeat one fact once per line and still not say which config to open.
+env_vars_report_entries: []

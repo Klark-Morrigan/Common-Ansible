@@ -36,6 +36,7 @@ was extended by the feature step that earned it.
   - [Cross-section - the reconciliation report (toolchain_report)](#cross-section---the-reconciliation-report-toolchain_report)
   - [Cross-section - the artifact report (artifact_report)](#cross-section---the-artifact-report-artifact_report)
   - [The file transport report (files_report)](#the-file-transport-report-files_report)
+  - [The environment block report (env_vars_report)](#the-environment-block-report-env_vars_report)
   - [Shared report plumbing (report_render)](#shared-report-plumbing-report_render)
 - [Tests and lint](#tests-and-lint)
   - [Ansible lint gate (ci-ansible.yml)](#ansible-lint-gate-ci-ansibleyml)
@@ -875,6 +876,47 @@ is authoritative about the file it just wrote, and a `stat` per file would spend
 a round trip per JAR to restate it. Sample output, the entry contract, and why
 an entry's origin is the presence of its `pattern` rather than a field of its
 own are in the [role README](roles/files_report/README.md).
+
+### The environment block report (env_vars_report)
+
+[`roles/env_vars_report`](roles/env_vars_report/) is the fourth report and the
+terminal consumer of the `env_vars_report_entries` accumulator `vm_env_vars`
+appends to as it reconciles. A play gets the report by including this role last.
+
+It exists because a variable is invisible in a way a transported file is not. A
+file can be confirmed with `ls`; a variable is observable only from inside a
+process that inherited it, and what an operator wants to confirm is the value
+such a process reads back - not the escaped `NAME="value"` line the file holds.
+So entries carry the value **as declared**, and the report is where a
+declaration becomes checkable without opening a session on the VM.
+
+```text
+Environment variables report for ubuntu-02-ci -- 2 written, 1 unchanged
+  block app-runtime -- 1 declared in /etc/environment
+    unchanged APP_HOME='/opt/app'
+  block ci-jars -- 2 declared in /etc/environment
+    written   STARSECTOR_HOME='/opt/ci-jars/starsector'
+    written   CI_JARS_OPTS='a "quoted" \ backslash'
+```
+
+Grouping is by managed block because that is the unit an operator acts on: a
+host can carry several consumers' blocks in one file, and the block name is
+what says which declaration produced a line. `written` / `unchanged` is
+likewise a property of the **block** - it is written or left alone in one
+atomic move - so every row of a group shares it.
+
+Where it differs from `files_report` is granularity, and that follows from the
+schemas: a `files` entry can be a glob that becomes any number of files, so its
+report is accumulated per file; an `envVars` entry is always exactly one
+variable, so config and report line up one to one.
+
+The single quotes are load-bearing. They are not the file's own quoting - they
+make surrounding whitespace visible, which is otherwise the one kind of wrong
+value a report prints indistinguishably from the right one. A row appearing
+here says the declaration reached the file, **not** that a service inherited
+it; that half is a `EnvironmentFile=` drop-in owned by the repo that owns the
+unit. Sample output, the entry contract and a symptom-to-diagnosis table are in
+the [role README](roles/env_vars_report/README.md).
 
 ### Shared report plumbing (report_render)
 

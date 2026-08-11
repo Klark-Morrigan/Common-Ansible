@@ -1,0 +1,27 @@
+---
+# Role metadata. The galaxy_info block exists to satisfy ansible-lint's
+# role-name / meta-no-info rules, not to publish to Galaxy (this repo is
+# consumed via a sibling checkout - see the repo README).
+
+galaxy_info:
+  role_name: env_vars_report
+  author: Common-Ansible
+  description: >-
+    Render which operator-declared environment variables this VM carries -
+    each one's managed block, its value as declared, the file it landed in
+    and whether this run wrote it. Reads the env_vars_report_entries
+    accumulator; writes nothing itself.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+  galaxy_tags:
+    - system
+    - environment
+
+# Standalone: the role reads one accumulator var and renders it. It has no
+# meta dep on vm_env_vars - a play that includes it without one reports an
+# empty run, which is itself informative.
+dependencies: []
