@@ -89,9 +89,10 @@
     - name: Write the managed environment block into the target file
       ansible.builtin.blockinfile:
         path: "{{ vm_env_vars_target }}"
+        # marker_begin / marker_end are left at the module's defaults,
+        # which are already BEGIN and END - the marker var carries the
+        # whole spelling and the reason it is what it is.
         marker: "{{ vm_env_vars_marker }}"
-        marker_begin: "{{ vm_env_vars_marker_begin }}"
-        marker_end: "{{ vm_env_vars_marker_end }}"
         # trim, because the template ends in a newline that would
         # otherwise render as a blank line inside the block. It cannot
         # eat a value's own trailing whitespace: every line ends in the
@@ -103,12 +104,26 @@
           {{ 'present' if vm_env_vars_entries | length > 0 else 'absent' }}
         # The file exists on every Ubuntu image, so this covers a
         # hand-stripped host rather than the ordinary case - and covers
-        # it the way the PowerShell transport does, which treats a
-        # missing file as empty content rather than as an error.
+        # it the way the PowerShell transport does, by treating a missing
+        # file as empty content rather than as an error.
+        #
+        # It applies to the write only. On the retraction path a missing
+        # file is left absent rather than created empty, which is where
+        # the two engines differ: the PowerShell transport writes
+        # unconditionally and leaves an empty file behind. Both converge
+        # on "this block is not present", which is the whole of what the
+        # retraction intent asks for.
         create: true
-        owner: "{{ vm_env_vars_target_owner }}"
-        group: "{{ vm_env_vars_target_group }}"
-        mode: "{{ vm_env_vars_target_mode }}"
+        # Stated here rather than inherited from whatever the file
+        # happened to be: world-readable is what every consumer of
+        # /etc/environment needs, and root-owned is what stops a
+        # non-root process rewriting the environment of every login and
+        # every service on the host. Matches what the PowerShell
+        # transport's atomic write applies, so the two engines leave the
+        # file in the same state.
+        owner: root
+        group: root
+        mode: "0644"
       become: true
       register: vm_env_vars_block_result
 

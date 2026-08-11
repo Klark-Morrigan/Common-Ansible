@@ -238,10 +238,13 @@ than merely inherited.
 | --- | --- | --- |
 | Fresh write | The block lands below the seeded lines, with the expected markers and rendered lines | converge + verify |
 | Escaping | A value carrying a quote **and** a backslash renders `\"` and `\\`, which a value with only one of the two would never reveal | converge + verify |
+| Value with surrounding whitespace | The block text is trimmed before it reaches `blockinfile`; the closing quote is all that keeps that trim off an operator's own spaces, so the padded value is declared **last** | converge + verify |
 | Idempotent re-run | A host whose block is already correct reports `changed=0` rather than rewriting the file every run | `molecule idempotence` |
 | Nothing declared | The no-op promise holds, rather than tripping over an empty loop, and contributes nothing to the report | converge |
+| Retraction of a block never written | A removal contributes no report entry, since the host then carries no variable from that block | converge |
 | Block replacement | A value changes, a variable is **dropped** and one is added - all under one block name, with the surroundings intact | verify |
 | Retraction | An empty entry list removes the block, leaving the file byte-identical to its seed | verify |
+| No environment file at all | The write creates it `root:root 0644` holding just the block; the retraction leaves it **absent** rather than manufacturing an empty one | verify |
 
 The mutating cases run in `verify.yml` because it runs after
 `idempotence`; folding them into the converge would make the converge
@@ -274,3 +277,11 @@ produced, so the matrix cannot drift into agreeing with a broken role. The
 cases assert the diagnostic too, not merely that something failed: a
 rejection that does not name the violated rule and the offending entry's
 position fails the test.
+
+The apply-and-expect-failure machinery is shared with `vm_files` through
+`Tests/molecule/tasks/_assert-role-rejected.yml`: the shape of that test
+does not vary with the role, only the role's name and its input var names
+do, and the caller supplies both. What that harness cannot do is take the
+input vars as a mapping - Ansible refuses a templated dictionary as a
+block's `vars` - so each scenario sets the role's own var names on the
+task that includes it, which is where they belong anyway.

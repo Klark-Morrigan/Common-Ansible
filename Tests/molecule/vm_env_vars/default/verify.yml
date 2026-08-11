@@ -119,3 +119,89 @@
           {{ target_file }} did not return to its seeded content after the
           block was removed:
           {{ (removed_file.content | b64decode) | to_json }}
+
+    # The last pair of cases: a host with no /etc/environment at all.
+    # Every Ubuntu image ships one, so this is the hand-stripped host
+    # rather than the ordinary case - but the role claims to treat a
+    # missing file as empty content rather than as an error, the way the
+    # PowerShell transport does, and a claim nothing exercises is a claim
+    # that survives being broken.
+    - name: Remove the environment file entirely
+      ansible.builtin.file:
+        path: "{{ target_file }}"
+        state: absent
+      become: true
+
+    - name: Reconcile a block onto a host with no environment file
+      ansible.builtin.include_role:
+        name: vm_env_vars
+      vars:
+        vm_env_vars_block_name: "{{ block_name }}"
+        vm_env_vars_entries: "{{ fixture_entries }}"
+
+    - name: Read the environment file created from nothing
+      ansible.builtin.slurp:
+        src: "{{ target_file }}"
+      become: true
+      register: created_file
+
+    - name: Stat the environment file created from nothing
+      ansible.builtin.stat:
+        path: "{{ target_file }}"
+      become: true
+      register: created_stat
+
+    # The block and nothing else, since there were no surrounding lines
+    # to preserve - and still root:root 0644, because the ownership is
+    # stated on the write rather than inherited from a file that did not
+    # exist to inherit from.
+    - name: Assert the file was created holding just the block
+      ansible.builtin.assert:
+        that:
+          - >-
+            (created_file.content | b64decode).splitlines()
+            == [block_begin] + fixture_block_lines + [block_end]
+          - created_stat.stat.pw_name == 'root'
+          - created_stat.stat.gr_name == 'root'
+          - created_stat.stat.mode == '0644'
+        fail_msg: >-
+          {{ target_file }} was not created holding just the declared
+          block: {{ (created_file.content | b64decode).splitlines() }},
+          stat: {{ created_stat.stat }}
+
+    # Retraction against a missing file: the one combination where there
+    # is nothing to remove and nothing to write. It must not fail, which
+    # the play simply continuing asserts, and it must not manufacture a
+    # file either - `create` applies to the write, so a host that has no
+    # environment file still has none afterwards.
+    #
+    # This is the one point where the two engines' observable results
+    # differ: the PowerShell transport writes unconditionally and leaves
+    # an empty file behind. Both converge on "this block is not present",
+    # so the divergence is pinned here rather than smoothed over.
+    - name: Remove the environment file again
+      ansible.builtin.file:
+        path: "{{ target_file }}"
+        state: absent
+      become: true
+
+    - name: Retract a block from a host with no environment file
+      ansible.builtin.include_role:
+        name: vm_env_vars
+      vars:
+        vm_env_vars_block_name: "{{ block_name }}"
+        vm_env_vars_entries: []
+
+    - name: Stat the environment file after retracting from nothing
+      ansible.builtin.stat:
+        path: "{{ target_file }}"
+      become: true
+      register: retracted_stat
+
+    - name: Assert retracting from nothing created no file
+      ansible.builtin.assert:
+        that:
+          - not retracted_stat.stat.exists
+        fail_msg: >-
+          retracting a block from a host with no {{ target_file }} created
+          one: {{ retracted_stat.stat }}

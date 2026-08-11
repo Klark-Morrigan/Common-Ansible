@@ -38,26 +38,25 @@ vm_env_vars_forbidden_value_chars:
   - char: "\x00"
     label: a NUL byte
 
-# The file policy - which file the block lives in, and what it is left
-# owned by. Fixed rather than configurable because the target is the whole
-# point: /etc/environment is the one file both pam_env (login sessions)
-# and a systemd unit's EnvironmentFile= can be pointed at, which is what
-# lets one declaration serve both.
+# The file the block lives in. Fixed rather than configurable because the
+# target is the whole point: /etc/environment is the one file both pam_env
+# (login sessions) and a systemd unit's EnvironmentFile= can be pointed
+# at, which is what lets one declaration serve both.
 #
-# root:root 0644 is stated on the write rather than inherited, and matches
-# what the PowerShell transport's atomic write applies, so the two engines
-# leave the file in the same state. World-readable is the file's existing
-# posture, not a choice made here - see the role README, Security.
+# Named rather than written on the task because three readers share it -
+# the write, one rejection message and the report - so a role pointed
+# somewhere else could not describe itself inconsistently. The ownership
+# the write applies has one reader and is stated there instead.
 vm_env_vars_target: /etc/environment
-vm_env_vars_target_owner: root
-vm_env_vars_target_group: root
-vm_env_vars_target_mode: "0644"
 
-# The sentinel markers, spelled to be byte-identical with the PowerShell
+# The sentinel marker, spelled to be byte-identical with the PowerShell
 # transport's: '# BEGIN <name>' / '# END <name>'. That equality is the
 # whole compatibility contract between the two engines - each recognises
 # and replaces the other's block instead of appending a second one - and
 # both parsers that read the file treat a leading '#' as a comment.
+#
+# '{mark}' is blockinfile's placeholder, substituted with its marker_begin
+# and marker_end - which already default to BEGIN and END, so the whole
+# marker contract is this one line rather than this line plus two
+# restatements of the module's own defaults.
 vm_env_vars_marker: "# {mark} {{ vm_env_vars_block_name }}"
-vm_env_vars_marker_begin: BEGIN
-vm_env_vars_marker_end: END

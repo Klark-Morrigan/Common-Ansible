@@ -28,6 +28,22 @@
       ansible.builtin.include_role:
         name: vm_env_vars
 
+    # The retraction path, against a block name this scenario never
+    # writes. It is here for what it must NOT add to the report: a
+    # removal leaves the host carrying no variable from that block, so
+    # there is nothing for the report to list, and an accumulator that
+    # gained a row would be describing a variable that is not there.
+    #
+    # Idempotent, and not by luck - removing a block that was never
+    # written is a no-op, which is what lets this sit in the converge
+    # where the accumulator is visible at all.
+    - name: Include the role under test retracting a block it never wrote
+      ansible.builtin.include_role:
+        name: vm_env_vars
+      vars:
+        vm_env_vars_block_name: "{{ retracted_block_name }}"
+        vm_env_vars_entries: []
+
     # The report accumulator is asserted HERE rather than in verify.yml
     # because it is a fact, and molecule's verifier is a separate
     # ansible-playbook run that cannot see one.
@@ -39,9 +55,11 @@
     - name: Assert the reconcile recorded every declared variable
       ansible.builtin.assert:
         that:
-          # One entry per declared variable, and the no-op include above
-          # contributed none - the other half of the promise that an
-          # unset role is a no-op.
+          # One entry per declared variable. Neither the no-op include
+          # nor the retraction above contributed one: the first is the
+          # other half of the promise that an unset role does nothing,
+          # the second is the promise that a removed block leaves
+          # nothing to report.
           - env_vars_report_entries | length == fixture_entries | length
           - >-
             env_vars_report_entries | map(attribute='name') | list
