@@ -74,7 +74,7 @@ Every rejection names the offending entry by position and by host, because
 "must be a string" on its own does not tell an operator which of a dozen
 entries in which VM definition to go and fix.
 
-The rules live in three files, split by what each protects:
+The work is split across four files, by what each one protects:
 
 | File | Owns |
 | --- | --- |
