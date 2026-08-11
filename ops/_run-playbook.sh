@@ -109,7 +109,11 @@ case "$(uname -s)" in
         # consumer resolves it Windows-side (C:\...) and the listener pwsh.exe
         # wants exactly that form, so unlike CA_CONSUMER_ROOT it needs no
         # /c -> /mnt rewrite. CA_HOST_FILE_SERVER_VERSION is a plain string.
-        export WSLENV="${WSLENV:+${WSLENV}:}SECRET_SUFFIX:CA_INVENTORY_VAULT:CA_EXTRA_VAULTS:CA_NEEDS_HOST_FILE_SERVER:CA_HOST_FILE_SERVER_DIR:CA_HOST_FILE_SERVER_VERSION:CA_REQUIRES_TOKEN:CA_CONSUMER_ROOT:GH_TOKEN"
+        # TIMING_TASKS_OUTPUT_PATH is read on the FAR side too - _ansible-env.sh
+        # gates the timing_tree callback on it - so it has to cross with the
+        # rest. It rides verbatim because the consumer already hands it over in
+        # /mnt form (the callback runs under this WSL side, not the caller's).
+        export WSLENV="${WSLENV:+${WSLENV}:}SECRET_SUFFIX:CA_INVENTORY_VAULT:CA_EXTRA_VAULTS:CA_NEEDS_HOST_FILE_SERVER:CA_HOST_FILE_SERVER_DIR:CA_HOST_FILE_SERVER_VERSION:CA_REQUIRES_TOKEN:CA_CONSUMER_ROOT:TIMING_TASKS_OUTPUT_PATH:GH_TOKEN"
 
         # MSYS2 (Git Bash) rewrites /-leading arguments into Windows paths
         # when launching a Windows .exe, which corrupts the /mnt path and

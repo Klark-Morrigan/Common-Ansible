@@ -1,0 +1,131 @@
+---
+# Validate the declared block, then reconcile it into /etc/environment.
+#
+# The validation is the role's own, not something inherited from a caller
+# that may not have run one: this role writes a file every login session
+# and every service that reads it will inherit from, so an operator typo
+# has to die here rather than surface as a VM carrying half a variable.
+# Doing it before the write also means a rejected run leaves the file
+# exactly as it found it.
+#
+# The shape rules are ported from the PowerShell engine that owns the same
+# `envVars` schema (Infrastructure.HyperV: Assert-VmEnvVarsField), so a
+# definition is accepted or rejected identically whichever engine runs it.
+#
+# Reconcile done, what it did is recorded in the play-wide env vars report
+# accumulator. Recording is its own step for the same reason it is in
+# vm_files: what lands and what the operator is told about it are
+# different concerns.
+
+# Checked before the block name is used for anything, including being
+# measured, because a non-string (an operator writing `blockName: 21`)
+# would otherwise fail inside `| trim` with a message about a filter
+# rather than about their config.
+- name: Assert the managed block name is a string
+  ansible.builtin.assert:
+    that:
+      - vm_env_vars_block_name is string
+    fail_msg: >-
+      vm_env_vars_block_name on host '{{ inventory_hostname }}' must be a
+      string (got '{{ vm_env_vars_block_name }}').
+
+- name: Assert the declared environment entries are a list
+  ansible.builtin.assert:
+    that:
+      # A bare string and a mapping both satisfy Jinja's `sequence` test,
+      # and both are plausible mistakes (a single entry written without
+      # its enclosing list), so each is excluded explicitly.
+      - vm_env_vars_entries is sequence
+      - vm_env_vars_entries is not string
+      - vm_env_vars_entries is not mapping
+    fail_msg: >-
+      vm_env_vars_entries on host '{{ inventory_hostname }}' must be a
+      list of name / value entries
+      (got '{{ vm_env_vars_entries }}').
+
+# Entries without a block name have nowhere to go: the markers are what
+# tells this consumer's keys apart from every other line in the file, so
+# there is no defensible default for them. Caught here rather than by the
+# no-op gate below, which would otherwise turn a missing blockName into a
+# run that reported success and wrote nothing.
+- name: Assert a managed block name accompanies the declared entries
+  ansible.builtin.assert:
+    that:
+      - vm_env_vars_block_name | trim | length > 0
+    fail_msg: >-
+      vm_env_vars_entries on host '{{ inventory_hostname }}' declares
+      {{ vm_env_vars_entries | length }} entr(ies) but
+      vm_env_vars_block_name is empty; a managed block cannot be written
+      without the name its BEGIN / END markers carry.
+  when: vm_env_vars_entries | length > 0
+
+# Everything below is gated on a block name rather than on entries,
+# because an empty entries list is a real intent - "remove the managed
+# block" - and only the absence of both is the no-op the role promises.
+- name: Reconcile the managed environment block
+  when: vm_env_vars_block_name | length > 0
+  block:
+    - name: Assert the managed block name is well formed
+      ansible.builtin.include_tasks: _assert-block-name.yml
+
+    - name: Assert every declared environment entry is well formed
+      ansible.builtin.include_tasks: _assert-entries.yml
+
+    # One write for the whole block, which is what makes the reconcile
+    # atomic from a reader's point of view: blockinfile writes a temp file
+    # and moves it into place, so /etc/environment is either the old
+    # version or the new one at every observable moment. That is also why
+    # the module is reused rather than the PowerShell transport's bash
+    # fragment being ported - the mechanism is already here, and the
+    # marker spelling is the only thing the two engines have to agree on.
+    #
+    # Lines outside the markers - Ubuntu's default PATH=..., operator
+    # additions, another consumer's block - are preserved untouched, so
+    # this role only ever owns what it declared.
+    #
+    # `state` carries the empty-entries intent: no entries means the
+    # block is removed rather than written empty, which would leave a
+    # pair of markers on the host forever.
+    - name: Write the managed environment block into the target file
+      ansible.builtin.blockinfile:
+        path: "{{ vm_env_vars_target }}"
+        # marker_begin / marker_end are left at the module's defaults,
+        # which are already BEGIN and END - the marker var carries the
+        # whole spelling and the reason it is what it is.
+        marker: "{{ vm_env_vars_marker }}"
+        # trim, because the template ends in a newline that would
+        # otherwise render as a blank line inside the block. It cannot
+        # eat a value's own trailing whitespace: every line ends in the
+        # closing quote.
+        block: >-
+          {{ lookup('ansible.builtin.template', 'environment-block.j2')
+             | trim }}
+        state: >-
+          {{ 'present' if vm_env_vars_entries | length > 0 else 'absent' }}
+        # The file exists on every Ubuntu image, so this covers a
+        # hand-stripped host rather than the ordinary case - and covers
+        # it the way the PowerShell transport does, by treating a missing
+        # file as empty content rather than as an error.
+        #
+        # It applies to the write only. On the retraction path a missing
+        # file is left absent rather than created empty, which is where
+        # the two engines differ: the PowerShell transport writes
+        # unconditionally and leaves an empty file behind. Both converge
+        # on "this block is not present", which is the whole of what the
+        # retraction intent asks for.
+        create: true
+        # Stated here rather than inherited from whatever the file
+        # happened to be: world-readable is what every consumer of
+        # /etc/environment needs, and root-owned is what stops a
+        # non-root process rewriting the environment of every login and
+        # every service on the host. Matches what the PowerShell
+        # transport's atomic write applies, so the two engines leave the
+        # file in the same state.
+        owner: root
+        group: root
+        mode: "0644"
+      become: true
+      register: vm_env_vars_block_result
+
+    - name: Record the managed block in the environment variables report
+      ansible.builtin.include_tasks: _record-report.yml

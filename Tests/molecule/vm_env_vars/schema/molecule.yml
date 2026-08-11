@@ -1,0 +1,65 @@
+---
+# Molecule scenario for the vm_env_vars role - the declaration schema.
+#
+# Split from the transport scenario on purpose: this one asserts what the
+# role REFUSES, which is a different kind of test. Every case applies the
+# real role to one malformed declaration and asserts it fails naming the
+# violated rule and, where relevant, the offending entry's position - the
+# role's own messages, not a copy of them.
+#
+# converge.yml is the positive control (a well-formed declaration is
+# accepted) and so is also what `molecule idempotence` re-runs. The
+# rejection matrix lives in verify.yml, keeping deliberate failures out of
+# the run whose changed-count is being measured.
+#
+# Single Ubuntu 24.04 container, Docker driver, ansible verifier. What the
+# accepted declaration then writes is not this scenario's subject -
+# Tests/molecule/vm_env_vars/default owns that - but it is a real write
+# precisely so acceptance here means a declaration that would genuinely
+# survive a run rather than one that merely parses.
+#
+# Image: reuses the toolchain_host_push base (python3 + sudo on
+# ubuntu:24.04). No custom Dockerfile - build it via the command in
+# Tests/molecule/toolchain_host_push/Dockerfile.
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: instance
+    image: common-ansible/toolchain-host-push-base:24.04
+    pre_build_image: true
+    command: /bin/sleep infinity
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  env:
+    # ANSIBLE_ROLES_PATH (env) wins over ansible.cfg's roles_path and
+    # propagates across every molecule phase. MOLECULE_PROJECT_DIRECTORY
+    # is the scenario dir; three levels up is the repo root, then roles/.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../../roles"
+  config_options:
+    defaults:
+      stdout_callback: yaml
+      callbacks_enabled: profile_tasks
+  inventory:
+    host_vars:
+      instance:
+        ansible_user: root
+
+        # The block name every rejection case inherits unless it is the
+        # thing under mutation. Named here so a case that breaks the
+        # ENTRIES does not also have to restate a valid block name, and
+        # so the two halves of the contract cannot drift apart.
+        valid_block_name: ci-jars
+
+verifier:
+  name: ansible

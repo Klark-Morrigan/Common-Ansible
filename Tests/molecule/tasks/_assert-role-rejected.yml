@@ -1,0 +1,62 @@
+---
+# Applies ONE role to ONE input the role has to refuse, and asserts it
+# does - exercising the real role rather than a copy of its rules.
+#
+# Shared by every scenario testing a validating role, because the shape of
+# that test does not vary with the role: whether an input is rejected by a
+# shape rule, by a pattern that resolves to nothing or by a marker that
+# would not survive its own file, the run must fail and the failure must
+# name what an operator has to go and fix.
+#
+# Lives in its own file because `loop` is not a valid attribute on a
+# block - a caller loops over an include of this file instead.
+#
+# Caller contract:
+#   assert_rejected_role    short name of the role to apply.
+#   assert_rejected_label   what the case is called in failure output.
+#   assert_rejected_expect  fragments the rejection must contain - the
+#                           rule that was violated, and where relevant the
+#                           position of the offending entry.
+#
+# Plus the role's OWN input vars, set by the caller on the task that
+# includes this file. They stay with the caller rather than being passed
+# through a mapping here for two reasons. Ansible refuses a templated
+# dictionary as a block's `vars` outright ("Vars in a Block must be
+# specified as a dictionary"), so there is no mechanism to pass one. And
+# the var names belong to the role under test, which is the caller's
+# subject and not this file's - a harness that named them would have to
+# learn a name every time a new role was tested through it.
+
+- name: Assert the input is rejected
+  block:
+    - name: Apply the role with the malformed input
+      ansible.builtin.include_role:
+        name: "{{ assert_rejected_role }}"
+
+    # Reached only when no assert in the role fired, which is the
+    # regression this whole file exists to catch.
+    - name: Fail if the role accepted the input
+      ansible.builtin.fail:
+        msg: >-
+          {{ assert_rejected_role }} accepted the case
+          '{{ assert_rejected_label }}'.
+  rescue:
+    # Distinguish "rejected for the right reason" from any other failure -
+    # a role that broke for an unrelated reason would otherwise look like
+    # a passing test, and so would one whose messages stopped naming the
+    # entry an operator has to go and fix.
+    #
+    # Searched over the whole serialized result rather than .msg: a
+    # per-entry rule may run under a `loop`, so the top-level msg can be
+    # only "One or more items failed" with the real diagnostic in
+    # .results[].msg. Matching the JSON covers both shapes.
+    - name: Confirm the rejection named the violated rule
+      vars:
+        assert_rejected_result: "{{ ansible_failed_result | default({}) | to_json }}"
+      ansible.builtin.assert:
+        that:
+          - item in assert_rejected_result
+        fail_msg: >-
+          Case '{{ assert_rejected_label }}' was rejected, but the failure
+          does not mention '{{ item }}': {{ assert_rejected_result }}
+      loop: "{{ assert_rejected_expect }}"

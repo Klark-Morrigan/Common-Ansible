@@ -86,7 +86,7 @@ on exactly what the operator saw instead of scraping stdout.
 This role owns the entry contract and the layout
 ([`templates/files-report.j2`](templates/files-report.j2)); the shared
 mechanics belong to [`report_render`](../report_render/README.md), which
-both toolchain reports also delegate to. See that role's README for why the
+the sibling reports also delegate to. See that role's README for why the
 template lookup stays in the calling role's var scope.
 
 ## Sample output

@@ -1,0 +1,157 @@
+---
+# Verify the rendered report.
+#
+# The verifier is a separate ansible-playbook run, so converge's facts are
+# gone - this play re-includes the role to re-render from the same
+# inventory-seeded entry set, then asserts on env_vars_report_lines. That
+# fact is the role's own output, so the assertions below check exactly the
+# text the operator sees rather than scraping the callback's stdout.
+#
+# Each case compares the WHOLE rendering, line for line, rather than
+# searching for fragments. The header, the group headings, the row
+# columns and the order they come in are not separable claims - they are
+# the report - and comparing it whole is the only check that also fails
+# when the template emits something nobody asked for, a stray blank line
+# included. Fragment searches would also have to escape the regex
+# metacharacters these values deliberately carry.
+
+- name: Verify - the environment variables report renders every declared variable
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Re-render the report
+      ansible.builtin.include_role:
+        name: env_vars_report
+
+    # The mixed set, and what its expected text pins down:
+    #
+    #   - the header counts both statuses,
+    #   - two blocks render as two groups, each with its own count and
+    #     the file it lives in, rather than as one heading over a flat
+    #     list,
+    #   - groups come out sorted by block name (app-runtime before
+    #     ci-jars) while rows inside a group keep the order they were
+    #     declared in, so a group reads against its config line by line,
+    #   - status is per row and padded into a column, so the names line
+    #     up whichever status a row carries,
+    #   - CI_JARS_OPTS renders the value as DECLARED: the \" and \\ the
+    #     file's own line carries appear nowhere,
+    #   - CI_JARS_PADDED's spaces are visible, which is the one wrong
+    #     value that would otherwise render identically to a right one.
+    - name: Assert the mixed entry set renders exactly
+      vars:
+        expected_lines:
+          - 'Environment variables report for instance -- 3 written, 1 unchanged'
+          - '  block app-runtime -- 1 declared in /etc/environment'
+          - '    unchanged APP_HOME=''/opt/app'''
+          - '  block ci-jars -- 3 declared in /etc/environment'
+          - '    written   STARSECTOR_HOME=''/opt/ci-jars/starsector'''
+          - '    written   CI_JARS_OPTS=''a "quoted" \ backslash'''
+          - '    written   CI_JARS_PADDED=''  padded  '''
+      ansible.builtin.assert:
+        that:
+          - env_vars_report_lines == expected_lines
+        fail_msg: >-
+          the report did not render the seeded entry set:
+          {{ env_vars_report_lines | default('<no lines>') }}
+
+    # A block whose variables do not all live in one file. `target` is a
+    # property of the ENTRY in the contract, so this shape is legal;
+    # today's only producer fixes its target to a constant, so it is not
+    # a shape that producer emits. That is why it is a minimal mutation
+    # of the seeded set rather than a fixture of its own - and why it is
+    # tested at all, since an untested heading that silently reported one
+    # of two files would name the wrong file to go and edit.
+    #
+    # It is a different case from a mixed status inside one group, which
+    # is deliberately NOT seeded anywhere: that one the mechanism cannot
+    # produce, because the block is written or left alone as a unit.
+    - name: Move one variable of a block into a second file
+      ansible.builtin.set_fact:
+        two_target_entries: >-
+          {{ [env_vars_report_entries[0]
+              | combine({'target': '/etc/environment.d/ci.conf'})]
+             + env_vars_report_entries[1:] }}
+
+    - name: Re-render the report with one block spanning two files
+      ansible.builtin.include_role:
+        name: env_vars_report
+      vars:
+        env_vars_report_entries: "{{ two_target_entries }}"
+
+    # Only the heading is asserted: everything else about this rendering
+    # is the mixed case's expectation, and restating it here would be two
+    # copies of one claim that can disagree.
+    - name: Assert the group heading names every file its variables landed in
+      vars:
+        expected_heading: >-
+          block ci-jars -- 3 declared in
+          /etc/environment.d/ci.conf, /etc/environment
+      ansible.builtin.assert:
+        that:
+          - ('  ' ~ expected_heading) in env_vars_report_lines
+        fail_msg: >-
+          the group heading did not name both files:
+          {{ env_vars_report_lines }}
+
+    # A host carrying one block - the common shape, since a second
+    # consumer declaring variables on the same VM is the exception. The
+    # absent block's group must simply not be there: an empty heading
+    # reads as a declaration that lost its variables, which is a state the
+    # producer cannot leave behind (a retraction removes the block and
+    # reports nothing).
+    #
+    # Rendered from a subset of the same seeded set rather than a second
+    # fixture, so the two cannot drift apart.
+    #
+    # The subset is materialised into a fact first. Passing the expression
+    # straight to the include would define env_vars_report_entries in
+    # terms of itself, and Ansible's lazy templating resolves that as a
+    # recursive loop rather than as "the previous value".
+    - name: Select a single block out of the seeded entry set
+      ansible.builtin.set_fact:
+        single_block_entries: >-
+          {{ env_vars_report_entries
+             | selectattr('block', 'equalto', 'app-runtime') | list }}
+
+    - name: Re-render the report with one block declared
+      ansible.builtin.include_role:
+        name: env_vars_report
+      vars:
+        env_vars_report_entries: "{{ single_block_entries }}"
+
+    - name: Assert a block with no declared variables is absent rather than empty
+      vars:
+        expected_lines:
+          - 'Environment variables report for instance -- 0 written, 1 unchanged'
+          - '  block app-runtime -- 1 declared in /etc/environment'
+          - '    unchanged APP_HOME=''/opt/app'''
+      ansible.builtin.assert:
+        that:
+          - env_vars_report_lines == expected_lines
+        fail_msg: >-
+          a single-block report did not drop the other group:
+          {{ env_vars_report_lines }}
+
+    # The report a VM whose config declares no environment variables gets,
+    # which is the common case until an estate starts using the schema. It
+    # has to read as "nothing was asked for" rather than as an empty
+    # heading an operator mistakes for a lost declaration.
+    #
+    # Last, because re-rendering replaces env_vars_report_lines - every
+    # assertion above reads the seeded entry set's rendering.
+    - name: Re-render the report with no entries at all
+      ansible.builtin.include_role:
+        name: env_vars_report
+      vars:
+        env_vars_report_entries: []
+
+    - name: Assert an empty report says nothing was declared
+      vars:
+        expected_lines:
+          - 'Environment variables report for instance -- 0 written, 0 unchanged'
+          - '  (no environment variables were declared - nothing was written here)'
+      ansible.builtin.assert:
+        that:
+          - env_vars_report_lines == expected_lines
+        fail_msg: "the empty report did not render: {{ env_vars_report_lines }}"

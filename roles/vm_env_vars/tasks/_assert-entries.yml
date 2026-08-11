@@ -1,0 +1,153 @@
+---
+# Rules for the declared entries. Ported from Assert-VmEnvVarsField, so a
+# definition is accepted or rejected identically whichever engine runs it.
+#
+# One task per rule, each looping over every entry, rather than one
+# include per entry: the schema here is flat - there is no second entry
+# form to discriminate, which is the only thing that earned vm_files its
+# per-entry dispatcher. Ordering carries the dependencies instead. A task
+# that dereferences a sub-field runs after the task that proved the
+# sub-field is there, and a failing assert aborts the run, so no rule ever
+# evaluates against a shape it was not written for.
+#
+# That ordering matters more than it looks: `fail_msg` is rendered on
+# EVERY run, passing or not, so a message dereferencing a sub-field whose
+# presence has not yet been asserted would fail the happy path.
+#
+# Caller contract (set by main.yml's gate):
+#   vm_env_vars_entries  known to be a list, known to be non-empty only
+#                        when a block name was declared. An empty list
+#                        reaches here on the "remove the block" path and
+#                        every loop below runs zero times.
+
+- name: Validate every declared environment entry
+  vars:
+    # Every rejection below opens with this, so an operator reading a
+    # failed run knows which entry of which host's definition to fix -
+    # the one thing a raw "must be a string" cannot tell them. Declared
+    # on the block so the prefix is spelled once; it is templated lazily,
+    # per loop iteration, against the index the loop is currently on.
+    vm_env_vars_entry_ctx: >-
+      vm_env_vars_entries[{{ vm_env_vars_entry_index }}] on host
+      '{{ inventory_hostname }}'
+  block:
+    - name: Assert every declared environment entry is a mapping
+      ansible.builtin.assert:
+        that:
+          - item is mapping
+        fail_msg: >-
+          {{ vm_env_vars_entry_ctx }} must be a mapping (a JSON object),
+          got '{{ item }}'.
+      loop: "{{ vm_env_vars_entries }}"
+      loop_control:
+        index_var: vm_env_vars_entry_index
+        # The entry itself is not a usable label - it may be any shape at
+        # all at this point, including the malformed ones these rules
+        # exist to reject - so the label is its position, which is also
+        # what every rejection message names.
+        label: "vm_env_vars_entries[{{ vm_env_vars_entry_index }}]"
+
+    # Strict allow-list, matching every other field of the VM schema. A
+    # silently-ignored sub-field is the failure mode this role must never
+    # have: an operator who wrote `values:` instead of `value:` would get
+    # a run that reported success and left the variable unset, and would
+    # then go looking for the fault on the consuming end.
+    - name: Assert no declared environment entry has an unknown sub-field
+      ansible.builtin.assert:
+        that:
+          - item.keys() | difference(vm_env_vars_allowed_fields) | length == 0
+        fail_msg: >-
+          {{ vm_env_vars_entry_ctx }} has unknown sub-field(s)
+          '{{ item.keys() | difference(vm_env_vars_allowed_fields)
+              | join(', ') }}'. Allowed:
+          {{ vm_env_vars_allowed_fields | join(', ') }}.
+      loop: "{{ vm_env_vars_entries }}"
+      loop_control:
+        index_var: vm_env_vars_entry_index
+        label: "vm_env_vars_entries[{{ vm_env_vars_entry_index }}]"
+
+    - name: Assert every declared environment entry has a name and a value
+      ansible.builtin.assert:
+        that:
+          - "'name' in item"
+          - "'value' in item"
+        fail_msg: >-
+          {{ vm_env_vars_entry_ctx }} is missing a required sub-field;
+          both 'name' and 'value' are required.
+      loop: "{{ vm_env_vars_entries }}"
+      loop_control:
+        index_var: vm_env_vars_entry_index
+        label: "vm_env_vars_entries[{{ vm_env_vars_entry_index }}]"
+
+    # The '=' hint is in the message rather than in a rule of its own: the
+    # regex already excludes it, and pasting a whole `KEY=VAL` assignment
+    # into the name field is the mistake that most often trips this rule.
+    - name: Assert every declared environment name is a POSIX identifier
+      ansible.builtin.assert:
+        that:
+          - item.name is string
+          - item.name is match(vm_env_vars_name_regex)
+        fail_msg: >-
+          {{ vm_env_vars_entry_ctx }}.name '{{ item.name }}' is not a
+          POSIX identifier (must match {{ vm_env_vars_name_regex }}); note
+          that the name carries the variable alone, never 'NAME=value'.
+      loop: "{{ vm_env_vars_entries }}"
+      loop_control:
+        index_var: vm_env_vars_entry_index
+        label: "vm_env_vars_entries[{{ vm_env_vars_entry_index }}]"
+
+    # Empty is refused rather than written as NAME="", because the two
+    # mean different things to a consumer testing the variable and only
+    # one of them can be spelled here - a variable an operator wants
+    # unset is retracted by dropping the entry.
+    - name: Assert every declared environment value is a non-empty string
+      ansible.builtin.assert:
+        that:
+          - item.value is string
+          - item.value | length > 0
+        fail_msg: >-
+          {{ vm_env_vars_entry_ctx }}.value must be a non-empty string
+          (got '{{ item.value }}').
+      loop: "{{ vm_env_vars_entries }}"
+      loop_control:
+        index_var: vm_env_vars_entry_index
+        label: "vm_env_vars_entries[{{ vm_env_vars_entry_index }}]"
+
+    - name: Assert no declared environment value breaks its own line
+      ansible.builtin.assert:
+        that:
+          - >-
+            vm_env_vars_forbidden_value_chars | map(attribute='char')
+            | select('in', item.value) | list | length == 0
+        fail_msg: >-
+          {{ vm_env_vars_entry_ctx }}.value contains
+          {{ vm_env_vars_forbidden_value_chars
+             | selectattr('char', 'in', item.value)
+             | map(attribute='label') | join(' and ') }}, which
+          {{ vm_env_vars_target }} cannot carry - it is line-oriented, so
+          the value would be split across lines or truncated.
+      loop: "{{ vm_env_vars_entries }}"
+      loop_control:
+        index_var: vm_env_vars_entry_index
+        label: "vm_env_vars_entries[{{ vm_env_vars_entry_index }}]"
+
+# Outside the block because it is the one rule about the entries as a SET
+# rather than about any one of them, so it has no entry to name a context
+# for. Last, so a malformed entry always surfaces before a duplicate does:
+# an operator chasing a 'declared twice' message on an entry that is also
+# malformed would otherwise miss the real bug.
+#
+# The whole ordered name list is quoted back rather than just the repeats.
+# A block is a handful of entries, the repeat is visible at a glance, and
+# it costs no filter that has to agree with the rule above it.
+- name: Assert every declared environment name is declared once
+  ansible.builtin.assert:
+    that:
+      - >-
+        vm_env_vars_entries | map(attribute='name') | unique | list | length
+        == vm_env_vars_entries | length
+    fail_msg: >-
+      vm_env_vars_entries on host '{{ inventory_hostname }}' declares the
+      same name more than once; two entries writing one key is an intent
+      that cannot be honoured. Names, in order:
+      {{ vm_env_vars_entries | map(attribute='name') | join(', ') }}.

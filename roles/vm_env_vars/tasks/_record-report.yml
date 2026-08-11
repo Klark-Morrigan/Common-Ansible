@@ -1,0 +1,53 @@
+---
+# Append what the reconcile just did to the play-wide environment
+# variables report accumulator (env_vars_report_entries).
+#
+# Separate from the write for the same reason it is separate in vm_files:
+# the write decides what the host carries, this file decides what an
+# operator is told about it.
+#
+# The projection is one entry per VARIABLE, not one per block, because
+# "which variables does this VM now carry because config asked for it"
+# is the question an operator has. Status is nonetheless a property of
+# the BLOCK - it is written or left alone as a unit, in one atomic move -
+# so every entry from one run carries the same value. That is stated
+# rather than hidden: there is no per-variable change detection to be had
+# here, and inventing one would be a report claiming precision the
+# mechanism does not have.
+#
+# The removal path contributes nothing, which is the honest answer: after
+# an empty-entries run the host carries no variable from this block, so
+# there is nothing for the report to list. The PLAY output still shows
+# the block task as changed.
+#
+# Status is only knowable HERE, at the write: `changed` is the one moment
+# "this run wrote it" and "it was already current" are distinguishable. A
+# scan of the finished file sees the same lines either way.
+#
+# Caller contract (set by tasks/main.yml):
+#   vm_env_vars_block_result  the blockinfile result for this host.
+
+# The noqa is the accumulator convention: env_vars_report_entries is a
+# cross-role contract, like files_report_entries, written here and read by
+# whichever role renders it - not a var belonging to this role.
+- name: Add every declared environment variable to the report
+  ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix]
+    env_vars_report_entries: >-
+      {{ (env_vars_report_entries | default([])) + [entry] }}
+  loop: "{{ vm_env_vars_entries }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    entry:
+      # The block the variable belongs to, so a host carrying two
+      # consumers' blocks reports which one asked for each line.
+      block: "{{ vm_env_vars_block_name }}"
+      name: "{{ item.name }}"
+      # The value as DECLARED, not as escaped into the file. The escaping
+      # is an artefact of the file format; what an operator wants to
+      # confirm is the value a process will actually read back.
+      value: "{{ item.value }}"
+      target: "{{ vm_env_vars_target }}"
+      status: >-
+        {{ vm_env_vars_block_result.changed
+           | ternary('written', 'unchanged') }}

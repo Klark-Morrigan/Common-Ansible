@@ -1,0 +1,22 @@
+---
+# Render the accumulated environment variables report for this host.
+#
+# Structure mirrors the three sibling reports exactly: this role owns the
+# entry contract (defaults/main.yml) and the layout
+# (templates/env-vars-report.j2), and report_render owns the shared
+# mechanics of turning rendered text into readable operator output and an
+# assertable fact. Fourth consumer of that tail rather than a fourth copy
+# of it.
+#
+# The template lookup happens HERE, in this role's own var scope, so it
+# resolves against this role's templates/ with no search-path ambiguity -
+# see toolchain_report/tasks/main.yml for the full rationale.
+
+- name: Render and print the environment variables report
+  ansible.builtin.include_role:
+    name: report_render
+  vars:
+    report_render_text: >-
+      {{ lookup('ansible.builtin.template', 'env-vars-report.j2') }}
+    report_render_fact: env_vars_report_lines
+    report_render_label: environment variables declared for this host

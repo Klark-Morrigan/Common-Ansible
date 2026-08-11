@@ -1,0 +1,207 @@
+---
+# Verify - what the converge left behind, then the two mutating cases.
+#
+# Idempotence (a re-run reporting changed=0) is proven separately by the
+# default sequence's `idempotence` phase, which runs before this play.
+# That ordering is what lets this play mutate: replacing a block and then
+# removing it are both writes, and neither can live in a converge whose
+# change count is being measured.
+#
+# The marker spelling is written out here rather than read from the role's
+# own vars. It is the entire compatibility contract with the PowerShell
+# engine that maintains the same block, so a test that derived it would
+# agree with the role however the role spelled it.
+
+- name: Verify - managed block post-conditions
+  hosts: all
+  gather_facts: false
+  vars:
+    block_begin: "# BEGIN {{ block_name }}"
+    block_end: "# END {{ block_name }}"
+  tasks:
+    # One assertion for the whole file, rather than one per property. The
+    # block's content, its markers, its position and the untouched
+    # surroundings are not separable claims: they are the file, and
+    # comparing the file line for line is the only check that also fails
+    # when the role writes something nobody asked for.
+    - name: Read the environment file after the converge
+      ansible.builtin.slurp:
+        src: "{{ target_file }}"
+      become: true
+      register: converged_file
+
+    - name: Assert the block landed intact below the untouched lines
+      ansible.builtin.assert:
+        that:
+          - >-
+            (converged_file.content | b64decode).splitlines()
+            == surrounding_text.splitlines() + [block_begin]
+               + fixture_block_lines + [block_end]
+        fail_msg: >-
+          {{ target_file }} does not hold the seeded lines followed by the
+          declared block:
+          {{ (converged_file.content | b64decode).splitlines() }}
+
+    # The write states root:root 0644 rather than inheriting it, and the
+    # seed was planted nobody:nogroup 0600 - so this is the assertion that
+    # tells an applied policy from an inherited one.
+    - name: Stat the environment file
+      ansible.builtin.stat:
+        path: "{{ target_file }}"
+      become: true
+      register: converged_stat
+
+    - name: Assert the environment file is root root at 0644
+      ansible.builtin.assert:
+        that:
+          - converged_stat.stat.isreg
+          - converged_stat.stat.pw_name == 'root'
+          - converged_stat.stat.gr_name == 'root'
+          - converged_stat.stat.mode == '0644'
+        fail_msg: >-
+          {{ target_file }} is not a root:root 0644 regular file;
+          stat: {{ converged_stat.stat }}
+
+    # Replacement, under the SAME block name: one variable's value
+    # changes, one is dropped, one is added. The drop is the case that
+    # matters - a reconcile that only ever added would satisfy every
+    # assertion above while leaving a retracted variable on the host for
+    # good.
+    - name: Reconcile the same block with a different entry set
+      ansible.builtin.include_role:
+        name: vm_env_vars
+      vars:
+        vm_env_vars_block_name: "{{ block_name }}"
+        vm_env_vars_entries: "{{ replacement_entries }}"
+
+    - name: Read the environment file after the replacement
+      ansible.builtin.slurp:
+        src: "{{ target_file }}"
+      become: true
+      register: replaced_file
+
+    - name: Assert the block was replaced and the surroundings kept
+      ansible.builtin.assert:
+        that:
+          - >-
+            (replaced_file.content | b64decode).splitlines()
+            == surrounding_text.splitlines() + [block_begin]
+               + replacement_block_lines + [block_end]
+        fail_msg: >-
+          {{ target_file }} was not reconciled to the replacement block:
+          {{ (replaced_file.content | b64decode).splitlines() }}
+
+    # Removal - an empty entry list against a declared block name, which
+    # is how an operator retracts the whole block.
+    - name: Reconcile the same block with no entries at all
+      ansible.builtin.include_role:
+        name: vm_env_vars
+      vars:
+        vm_env_vars_block_name: "{{ block_name }}"
+        vm_env_vars_entries: []
+
+    - name: Read the environment file after the removal
+      ansible.builtin.slurp:
+        src: "{{ target_file }}"
+      become: true
+      register: removed_file
+
+    # Compared as bytes, not as lines. This is the strongest claim the
+    # scenario can make and the reason the seed exists: after a block is
+    # written, replaced and removed, the file has to be exactly what it
+    # was before the role ever ran - no orphaned markers, no blank line
+    # left where the block was, no rival consumer's block disturbed.
+    - name: Assert the file is byte identical to the seeded content
+      ansible.builtin.assert:
+        that:
+          - (removed_file.content | b64decode) == surrounding_text
+        fail_msg: >-
+          {{ target_file }} did not return to its seeded content after the
+          block was removed:
+          {{ (removed_file.content | b64decode) | to_json }}
+
+    # The last pair of cases: a host with no /etc/environment at all.
+    # Every Ubuntu image ships one, so this is the hand-stripped host
+    # rather than the ordinary case - but the role claims to treat a
+    # missing file as empty content rather than as an error, the way the
+    # PowerShell transport does, and a claim nothing exercises is a claim
+    # that survives being broken.
+    - name: Remove the environment file entirely
+      ansible.builtin.file:
+        path: "{{ target_file }}"
+        state: absent
+      become: true
+
+    - name: Reconcile a block onto a host with no environment file
+      ansible.builtin.include_role:
+        name: vm_env_vars
+      vars:
+        vm_env_vars_block_name: "{{ block_name }}"
+        vm_env_vars_entries: "{{ fixture_entries }}"
+
+    - name: Read the environment file created from nothing
+      ansible.builtin.slurp:
+        src: "{{ target_file }}"
+      become: true
+      register: created_file
+
+    - name: Stat the environment file created from nothing
+      ansible.builtin.stat:
+        path: "{{ target_file }}"
+      become: true
+      register: created_stat
+
+    # The block and nothing else, since there were no surrounding lines
+    # to preserve - and still root:root 0644, because the ownership is
+    # stated on the write rather than inherited from a file that did not
+    # exist to inherit from.
+    - name: Assert the file was created holding just the block
+      ansible.builtin.assert:
+        that:
+          - >-
+            (created_file.content | b64decode).splitlines()
+            == [block_begin] + fixture_block_lines + [block_end]
+          - created_stat.stat.pw_name == 'root'
+          - created_stat.stat.gr_name == 'root'
+          - created_stat.stat.mode == '0644'
+        fail_msg: >-
+          {{ target_file }} was not created holding just the declared
+          block: {{ (created_file.content | b64decode).splitlines() }},
+          stat: {{ created_stat.stat }}
+
+    # Retraction against a missing file: the one combination where there
+    # is nothing to remove and nothing to write. It must not fail, which
+    # the play simply continuing asserts, and it must not manufacture a
+    # file either - `create` applies to the write, so a host that has no
+    # environment file still has none afterwards.
+    #
+    # This is the one point where the two engines' observable results
+    # differ: the PowerShell transport writes unconditionally and leaves
+    # an empty file behind. Both converge on "this block is not present",
+    # so the divergence is pinned here rather than smoothed over.
+    - name: Remove the environment file again
+      ansible.builtin.file:
+        path: "{{ target_file }}"
+        state: absent
+      become: true
+
+    - name: Retract a block from a host with no environment file
+      ansible.builtin.include_role:
+        name: vm_env_vars
+      vars:
+        vm_env_vars_block_name: "{{ block_name }}"
+        vm_env_vars_entries: []
+
+    - name: Stat the environment file after retracting from nothing
+      ansible.builtin.stat:
+        path: "{{ target_file }}"
+      become: true
+      register: retracted_stat
+
+    - name: Assert retracting from nothing created no file
+      ansible.builtin.assert:
+        that:
+          - not retracted_stat.stat.exists
+        fail_msg: >-
+          retracting a block from a host with no {{ target_file }} created
+          one: {{ retracted_stat.stat }}

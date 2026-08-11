@@ -1,0 +1,134 @@
+---
+# Molecule scenario for the vm_env_vars role - the managed block itself.
+#
+# One of two: `schema` asserts what the role refuses, and this one asserts
+# what it writes. The default sequence's `idempotence` phase is why the
+# fresh write lives in the converge - a reconcile that re-reports
+# `changed` on a host whose block is already correct would rewrite
+# /etc/environment on every provisioning run, and is the failure this
+# scenario exists to catch.
+#
+# The mutating cases (replacing a block, removing one) run in verify.yml
+# instead, because they run after `idempotence` in the default sequence.
+# Folding them into the converge would make the converge non-idempotent by
+# construction - its second run would put the first run's entries back.
+#
+# Single Ubuntu 24.04 container, Docker driver, ansible verifier. The role
+# only edits a file, so a non-systemd sleep-infinity container suffices -
+# and deliberately so: what a systemd unit does with the file it writes is
+# the consuming repo's contract, not this role's.
+#
+# Image: reuses the toolchain_host_push base (python3 + sudo on
+# ubuntu:24.04). No custom Dockerfile - build it via the command in
+# Tests/molecule/toolchain_host_push/Dockerfile.
+
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: instance
+    image: common-ansible/toolchain-host-push-base:24.04
+    pre_build_image: true
+    command: /bin/sleep infinity
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  env:
+    # ANSIBLE_ROLES_PATH (env) wins over ansible.cfg's roles_path and
+    # propagates across every molecule phase. MOLECULE_PROJECT_DIRECTORY
+    # is the scenario dir; three levels up is the repo root, then roles/.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../../roles"
+  config_options:
+    defaults:
+      stdout_callback: yaml
+      callbacks_enabled: profile_tasks
+  inventory:
+    host_vars:
+      instance:
+        ansible_user: root
+
+        # The fixture contract, stated once here because all three phases
+        # need it: prepare seeds the file, converge declares the block,
+        # verify asserts what became of both.
+        target_file: /etc/environment
+
+        # What the file already holds before the role ever runs, and what
+        # it must still hold afterwards - byte for byte. Three kinds of
+        # line the role must not own, in one fixture:
+        #
+        #   - the distribution's own PATH, which every Ubuntu image ships
+        #     and which a careless rewrite would drop,
+        #   - a line an operator added by hand,
+        #   - ANOTHER consumer's managed block, which is the case that
+        #     makes the per-consumer block name worth having at all.
+        #
+        # Held as text rather than as a list of lines so prepare writes
+        # exactly these bytes; verify splits it with splitlines() when it
+        # needs the lines.
+        surrounding_text: |
+          PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+          OPERATOR_ADDED="left alone"
+          # BEGIN other-consumer
+          OTHER_HOME="/opt/other"
+          # END other-consumer
+
+        block_name: ci-jars
+
+        # Already in the role's entry shape, so converge passes it
+        # straight through with no projection - the scenario declares
+        # exactly what an operator's config would.
+        # A block name this scenario never writes, used only to exercise
+        # retracting one that was never there.
+        retracted_block_name: ci-jars-absent
+
+        fixture_entries:
+          - name: STARSECTOR_HOME
+            value: /opt/ci-jars/starsector
+          # A value carrying both characters the renderer escapes, and
+          # carrying them together: escaping in the wrong order leaves a
+          # stray backslash against the quotes, which a value holding
+          # only one of the two would never reveal.
+          - name: CI_JARS_OPTS
+            value: 'a "quoted" \ backslash'
+          # Whitespace at both ends of a value, and LAST in the list on
+          # purpose. The block text is trimmed before it reaches
+          # blockinfile, to drop the newline the template ends with, and
+          # the only thing standing between that trim and an operator's
+          # own trailing spaces is the closing quote this line ends in.
+          - name: CI_JARS_PADDED
+            value: '  padded  '
+
+        # The exact lines the entries above must render to, spelled out
+        # rather than derived. A derived expectation would apply the same
+        # escaping the role applies and agree with it however wrong it
+        # was.
+        fixture_block_lines:
+          - 'STARSECTOR_HOME="/opt/ci-jars/starsector"'
+          - 'CI_JARS_OPTS="a \"quoted\" \\ backslash"'
+          - 'CI_JARS_PADDED="  padded  "'
+
+        # The replacement the verifier applies to the SAME block name:
+        # one name kept, one dropped, one added. Dropping matters most -
+        # a reconcile that only ever added would satisfy every other
+        # assertion here while leaving retracted variables on the host
+        # forever.
+        replacement_entries:
+          - name: STARSECTOR_HOME
+            value: /opt/ci-jars/starsector-next
+          - name: CI_JARS_EXTRA
+            value: /opt/ci-jars/extra
+
+        replacement_block_lines:
+          - 'STARSECTOR_HOME="/opt/ci-jars/starsector-next"'
+          - 'CI_JARS_EXTRA="/opt/ci-jars/extra"'
+
+verifier:
+  name: ansible

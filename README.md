@@ -31,8 +31,12 @@ was extended by the feature step that earned it.
     - [bats-libraries toolchain pattern (toolchain_bats_libs)](#bats-libraries-toolchain-pattern-toolchain_bats_libs)
   - [Section 3 - base-image daemons](#section-3---base-image-daemons)
     - [Docker daemon (docker)](#docker-daemon-docker)
+  - [Operator-declared VM state - the file transport (vm_files)](#operator-declared-vm-state---the-file-transport-vm_files)
+  - [Operator-declared VM state - the environment block (vm_env_vars)](#operator-declared-vm-state---the-environment-block-vm_env_vars)
   - [Cross-section - the reconciliation report (toolchain_report)](#cross-section---the-reconciliation-report-toolchain_report)
   - [Cross-section - the artifact report (artifact_report)](#cross-section---the-artifact-report-artifact_report)
+  - [The file transport report (files_report)](#the-file-transport-report-files_report)
+  - [The environment block report (env_vars_report)](#the-environment-block-report-env_vars_report)
   - [Shared report plumbing (report_render)](#shared-report-plumbing-report_render)
 - [Tests and lint](#tests-and-lint)
   - [Ansible lint gate (ci-ansible.yml)](#ansible-lint-gate-ci-ansibleyml)
@@ -291,11 +295,13 @@ compose, the orchestrator itself) stay at the `ops/` root:
   argv on Linux is private to the owning user's process tree.
   Keeping dispatch a pure `<Name>` derivation here (the layer that
   already dispatches per domain) is what lets the orchestrator stay
-  ignorant of any specific consumer. Future payload domains (e.g.
-  toolchain delivery: JDK / .NET SDK / file copy) land as a peer
-  `_build-extra-vars-<Name>.sh` dispatched by the same derivation —
-  the bridge already forwards every declared vault verbatim, so no
-  call site here changes.
+  ignorant of any specific consumer. A payload domain that needs its
+  own vault lands as a peer `_build-extra-vars-<Name>.sh` dispatched by
+  the same derivation - the bridge already forwards every declared
+  vault verbatim, so no call site here changes. A flow whose desired
+  state already rides in the shared inventory needs no helper at all:
+  the `files` transport reshapes that inventory consumer-side and hands
+  the result to its playbook as extra-vars.
 - [`ops/_run-playbook.sh`](ops/_run-playbook.sh) - thin,
   consumer-agnostic orchestrator. Validates args, parses the consumer
   contract (via `_parse-consumer-contract.sh`), sets up a
@@ -461,12 +467,21 @@ their short name once `<root>/roles` is on `ANSIBLE_ROLES_PATH` (see
 [Consuming the substrate](#consuming-the-substrate)). Roles read the
 extra-vars and inventory the bridge composes and are not standalone.
 
-They are grouped below by the same three-section acquisition taxonomy the
+The toolchain roles are grouped below by the same three-section acquisition
+taxonomy the
 [`toolchains` config block](#the-toolchains-taxonomy-block-vm_provisioner_configtoolchains)
 uses - **how** each tool reaches the target, which is what decides a role's
 shape far more than what it installs. Within a section the roles share a
 mechanism (and, in section 1, a literal shared pattern role); across
 sections they share almost nothing.
+
+That taxonomy covers toolchains only. Roles that reconcile operator-declared
+VM state - content the operator names in the VM definition rather than a tool
+the estate installs - sit outside it and are grouped separately: they carry no
+versions, no manifests and no uninstall direction, because every declared item
+is reconciled on every run rather than short-circuiting on a recorded install.
+The report roles close the section, one per subject plus the shared tail they
+all delegate to.
 
 ### Section 1 - host-pushed toolchains
 
@@ -670,6 +685,107 @@ systemd-init container so the inner daemon really starts and `verify` can
 run `docker ps`. Full var contract, the security note, and the
 docker-in-docker caveat are in the [role README](roles/docker/README.md).
 
+### Operator-declared VM state - the file transport (vm_files)
+
+[`roles/vm_files`](roles/vm_files/) transports operator-declared host files
+onto a provisioned VM. Its input **is** the `files` array of a VM definition,
+reproduced field for field: the estate has spoken that schema since before this
+role existed, so the two entry forms, their sub-field names and their
+validation rules are ported rather than redesigned. A definition a consumer's
+config already carries is valid here unchanged, and is accepted or rejected
+identically whichever engine runs it.
+
+An entry is either **single** (`source`, `target` - one named controller-side
+file to one absolute VM path) or **bulk** (`pattern`, `targetDir`, optional
+`recurse` and `preserveRelativePath` - every file matching an absolute glob,
+under one absolute VM directory), discriminated by the presence of `pattern`.
+Sub-fields are camelCase because they are config keys parsed out of the VM
+definition JSON, not Ansible variables.
+
+Three things are worth knowing at this level:
+
+- **The role validates its own input**, before the first byte crosses the
+  connection. It is a provisioning vector in its own right, not a downstream
+  stage of some other engine's pre-pass, so it cannot assume validation has
+  run. Unknown sub-fields are rejected: a silently-ignored `targetdir` typo
+  would report success and copy nothing, the one failure mode a file transport
+  must never have.
+- **Bulk entries resolve on the controller, at transport time**, because a glob
+  is time-varying and the only resolution still true when the bytes are read is
+  the one the transport is about to act on. The anchor, flatten / preserve and
+  recurse rules are ported from the PowerShell resolver so a pattern names the
+  same files under either engine. Two constructs are refused outright - relative
+  patterns and character classes (`[ab].jar`) - because in both cases the
+  alternative is a *silent* divergence, where one definition copies a different
+  set of files depending on which engine ran it.
+- **Files land root-owned and `0644`** (directories the role creates, `0755`),
+  stated on the task rather than inherited from the source: whatever modes a
+  file carries on the controller are an accident of how it got there, possibly a
+  Windows volume with no POSIX modes at all. The policy lives in `vars/`, not
+  `defaults/`, so a consumer cannot relax it for one host - and the report
+  quotes those same constants, so it cannot describe ownership the role does not
+  enforce.
+
+Transport is `ansible.builtin.copy`, so the bytes travel inside the connection
+the play already has: no listener is opened and nothing is published on the
+network for the duration of a run. Source paths are POSIX and name files on the
+controller - a Windows-hosted estate translates its drive letters *before*
+dispatch, which is what keeps this role free of host-topology knowledge and
+testable in a plain container. The entry contract, the full resolution rule
+table, and what is deliberately left unvalidated are in the
+[role README](roles/vm_files/README.md).
+
+### Operator-declared VM state - the environment block (vm_env_vars)
+
+[`roles/vm_env_vars`](roles/vm_env_vars/) is the peer of `vm_files` and the
+other half of "what an operator declared for this VM": one role moves the
+payload, this one moves the variables that let the VM find it. Its input **is**
+the `envVars` object of a VM definition - a `blockName` plus a list of
+`name` / `value` entries - ported field for field from the same PowerShell
+engine, on the same terms.
+
+It reconciles a sentinel-delimited **managed block** inside `/etc/environment`:
+
+```ini
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# BEGIN ci-jars
+STARSECTOR_HOME="/opt/ci-jars/starsector"
+# END ci-jars
+```
+
+Three things are worth knowing at this level:
+
+- **The role owns the lines between its markers and nothing else.** The
+  distribution's own `PATH`, operator additions and *another consumer's block*
+  survive byte for byte. That is what the per-consumer block name buys: a single
+  shared sentinel would let the last writer wipe every other consumer's keys.
+- **There are three states, not two.** Both vars unset is a no-op, so a play can
+  always include the role. A block name with an **empty** entry list is not the
+  same thing - it is the retraction intent, "remove this block", which is how a
+  variable is taken back off a host. Entries *without* a block name is an error
+  rather than a no-op, because there is no defensible default for the markers and
+  treating it as one would turn a missing `blockName` into a run that reported
+  success and wrote nothing.
+- **The markers and the rendered lines are byte-compatible with the PowerShell
+  engine**, which still writes the same block on the same hosts. Each engine
+  therefore finds and replaces the other's block instead of appending a second
+  one. Position is the one thing that differs - the PowerShell transport
+  re-appends at end of file, `blockinfile` replaces in place - which is a
+  migration, not a conflict.
+
+Values render as `NAME="value"`, escaping backslash **before** double-quote:
+escaping it after would re-escape the backslashes just emitted for the quotes.
+Both parsers that read this file - `pam_env` and systemd's `EnvironmentFile=` -
+read `"..."` with exactly those two escapes.
+
+The target is fixed rather than configurable, and that is the point:
+`/etc/environment` is the one file both `pam_env` (login sessions) and a systemd
+unit's `EnvironmentFile=` can be pointed at, so one declaration serves both. A
+unit does **not** read it on its own; wiring a drop-in belongs to the repo that
+owns the unit. The file is world-readable, so nothing secret belongs in a VM's
+`envVars`. The full contract, the compatibility rules and the security notes are
+in the [role README](roles/vm_env_vars/README.md).
+
 ### Cross-section - the reconciliation report (toolchain_report)
 
 [`roles/toolchain_report`](roles/toolchain_report/) installs nothing. It
@@ -732,6 +848,75 @@ landed). apt packages and the Docker engine are absent by design - dpkg
 owns its own download cache. Sample output, the entry contract, and a
 symptom-to-diagnosis table are in the
 [role README](roles/artifact_report/README.md).
+
+### The file transport report (files_report)
+
+[`roles/files_report`](roles/files_report/) is the third report and the
+terminal consumer of the `files_report_entries` accumulator `vm_files` appends
+to as it transports. A play gets the report by including this role last.
+
+It exists because a bulk entry is one line of config that becomes an unknown
+number of files. An operator reading the config knows a glob was declared; only
+the run knows what it matched, and only the run knows what each match was named
+once `preserveRelativePath` had its say - a target carrying `v1/` where the
+pattern carried `v*` appears nowhere in the config. The PowerShell engine that
+has owned this schema never printed that expansion. So entries are **one per
+file that landed, not per declared entry**.
+
+Its second answer is what a re-run did: `copied` names exactly the files this
+run wrote, `unchanged` the ones already correct. That distinction exists only at
+the moment of the copy, which is why the report is accumulated as the transport
+happens rather than derived afterwards.
+
+Contrast with `artifact_report` is the useful one. That role **probes**, because
+a converged toolchain run short-circuits on a manifest and never touches the
+artifact, so an inferred report would describe a cache from months ago. Nothing
+short-circuits here - every declared file is reconciled on every run - so `copy`
+is authoritative about the file it just wrote, and a `stat` per file would spend
+a round trip per JAR to restate it. Sample output, the entry contract, and why
+an entry's origin is the presence of its `pattern` rather than a field of its
+own are in the [role README](roles/files_report/README.md).
+
+### The environment block report (env_vars_report)
+
+[`roles/env_vars_report`](roles/env_vars_report/) is the fourth report and the
+terminal consumer of the `env_vars_report_entries` accumulator `vm_env_vars`
+appends to as it reconciles. A play gets the report by including this role last.
+
+It exists because a variable is invisible in a way a transported file is not. A
+file can be confirmed with `ls`; a variable is observable only from inside a
+process that inherited it, and what an operator wants to confirm is the value
+such a process reads back - not the escaped `NAME="value"` line the file holds.
+So entries carry the value **as declared**, and the report is where a
+declaration becomes checkable without opening a session on the VM.
+
+```text
+Environment variables report for ubuntu-02-ci -- 2 written, 1 unchanged
+  block app-runtime -- 1 declared in /etc/environment
+    unchanged APP_HOME='/opt/app'
+  block ci-jars -- 2 declared in /etc/environment
+    written   STARSECTOR_HOME='/opt/ci-jars/starsector'
+    written   CI_JARS_OPTS='a "quoted" \ backslash'
+```
+
+Grouping is by managed block because that is the unit an operator acts on: a
+host can carry several consumers' blocks in one file, and the block name is
+what says which declaration produced a line. `written` / `unchanged` is
+likewise a property of the **block** - it is written or left alone in one
+atomic move - so every row of a group shares it.
+
+Where it differs from `files_report` is granularity, and that follows from the
+schemas: a `files` entry can be a glob that becomes any number of files, so its
+report is accumulated per file; an `envVars` entry is always exactly one
+variable, so config and report line up one to one.
+
+The single quotes are load-bearing. They are not the file's own quoting - they
+make surrounding whitespace visible, which is otherwise the one kind of wrong
+value a report prints indistinguishably from the right one. A row appearing
+here says the declaration reached the file, **not** that a service inherited
+it; that half is a `EnvironmentFile=` drop-in owned by the repo that owns the
+unit. Sample output, the entry contract and a symptom-to-diagnosis table are in
+the [role README](roles/env_vars_report/README.md).
 
 ### Shared report plumbing (report_render)
 

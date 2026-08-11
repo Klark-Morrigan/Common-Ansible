@@ -1,0 +1,45 @@
+---
+# Rules for the sentinel block name. Ported from Assert-VmEnvVarsField.
+#
+# Its own file rather than four more tasks in main.yml because it guards a
+# different thing from the entry rules: those protect the file's CONTENT,
+# these protect the marker that says where this consumer's content starts
+# and stops. A block name that breaks its marker line does not corrupt one
+# variable - it detaches the whole block from the engine that owns it, so
+# the next run appends a second copy instead of replacing the first.
+#
+# Caller contract (set by main.yml's gate):
+#   vm_env_vars_block_name  known to be a non-empty string.
+
+- name: Assert the managed block name is within the length limit
+  ansible.builtin.assert:
+    that:
+      - vm_env_vars_block_name | length <= vm_env_vars_block_name_max_length
+    fail_msg: >-
+      vm_env_vars_block_name on host '{{ inventory_hostname }}' is
+      {{ vm_env_vars_block_name | length }} characters, over the
+      {{ vm_env_vars_block_name_max_length }}-character limit.
+
+- name: Assert the managed block name uses only permitted characters
+  ansible.builtin.assert:
+    that:
+      - vm_env_vars_block_name is match(vm_env_vars_block_name_regex)
+    fail_msg: >-
+      vm_env_vars_block_name '{{ vm_env_vars_block_name }}' on host
+      '{{ inventory_hostname }}' contains a disallowed character
+      (allowed: {{ vm_env_vars_block_name_regex }}).
+
+# After the character rule rather than before it, so the value quoted back
+# to the operator is the raw name they wrote - a trimmed one would send
+# them looking for whitespace that the message had already removed.
+#
+# Surrounding whitespace is refused rather than trimmed because the marker
+# is matched literally on every subsequent run: a name silently trimmed
+# here would stop matching the block a differently-trimming engine wrote.
+- name: Assert the managed block name has no surrounding whitespace
+  ansible.builtin.assert:
+    that:
+      - vm_env_vars_block_name | trim == vm_env_vars_block_name
+    fail_msg: >-
+      vm_env_vars_block_name '{{ vm_env_vars_block_name }}' on host
+      '{{ inventory_hostname }}' must not start or end with whitespace.

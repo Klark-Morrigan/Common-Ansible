@@ -1,0 +1,51 @@
+{#
+  Render env_vars_report_entries for one host as plain text lines.
+
+  Layout mechanics (column-0 block tags, plain ASCII, why not colour) are
+  the same as the other reports' templates - see
+  roles/toolchain_report/templates/toolchain-report.j2 for the rationale.
+
+  Grouped by managed block because that is the unit an operator acts on: a
+  host may carry several consumers' blocks in one file, and the block name
+  is what says which declaration produced a line and which one to go and
+  edit. The status column repeats inside a group - it is a property of the
+  block, so every row of a group carries the same value - and it is
+  printed per row anyway so that a group read in isolation is still
+  complete, and so the two reports' rows read alike.
+
+  The file each block lives in is on the GROUP heading rather than on each
+  row: it is one fact per block, and repeating it per variable would push
+  the value - the thing an operator came to read - off to the right. It is
+  taken as the distinct set of the group's targets rather than as the
+  first row's, so a group whose rows ever disagreed says so instead of
+  quietly reporting one of them.
+
+  Values are printed in single quotes, which the file's own NAME="value"
+  lines never use. Two reasons, both about not misleading: the value here
+  is the DECLARED one, so a double-quoted rendering would invite an
+  operator to read the escaping off a line that carries none; and the
+  quotes are what make surrounding whitespace visible, which is otherwise
+  the one kind of wrong value a report can print indistinguishably from
+  the right one.
+
+  The header counts statuses only, like every sibling report. A total
+  would be the sum of the two numbers beside it.
+
+  Ordering is stable without sorting anything here: groupby sorts by the
+  grouping key, and within a group the rows keep accumulator order - which
+  is the order the variables were declared in, so a group can be read
+  against the config it came from line by line.
+#}
+{% set entries = env_vars_report_entries | default([]) %}
+{% set written = entries | selectattr('status', 'equalto', 'written') | list %}
+{% set unchanged = entries | selectattr('status', 'equalto', 'unchanged') | list %}
+Environment variables report for {{ inventory_hostname }} -- {{ written | length }} written, {{ unchanged | length }} unchanged
+{% if not entries %}
+  (no environment variables were declared - nothing was written here)
+{% endif %}
+{% for block, rows in entries | groupby('block') %}
+  block {{ block }} -- {{ rows | length }} declared in {{ rows | map(attribute='target') | unique | join(', ') }}
+{% for entry in rows %}
+    {{ "%-9s" | format(entry.status) }} {{ entry.name }}='{{ entry.value }}'
+{% endfor %}
+{% endfor %}
