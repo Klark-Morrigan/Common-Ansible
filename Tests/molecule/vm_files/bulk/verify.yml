@@ -120,8 +120,16 @@
     # resolution - apply the real role, require it to fail, and require
     # the failure to name what an operator has to go and fix.
     - name: Assert each unresolvable bulk entry is rejected
-      ansible.builtin.include_tasks: ../tasks/_assert-entry-rejected.yml
+      ansible.builtin.include_tasks: ../../tasks/_assert-role-rejected.yml
       loop: "{{ vm_files_cases }}"
       loop_control:
         loop_var: vm_files_case
         label: "{{ vm_files_case.name }}"
+      # The role's own input var is set here, on the including task, so
+      # the harness never has to learn it. It is templated per iteration
+      # against the case the loop is currently on.
+      vars:
+        assert_rejected_role: vm_files
+        assert_rejected_label: "{{ vm_files_case.name }}"
+        assert_rejected_expect: "{{ vm_files_case.expect }}"
+        vm_files_entries: "{{ vm_files_case.entries }}"

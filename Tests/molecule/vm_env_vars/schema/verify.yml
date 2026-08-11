@@ -7,9 +7,10 @@
 # because a validator whose diagnostics are unreadable costs more than the
 # typo it caught.
 #
-# Cases run against the role itself through
-# ../tasks/_assert-block-rejected.yml; nothing here re-implements a rule,
-# so the matrix cannot drift into agreeing with a broken role.
+# Cases run against the role itself through the shared
+# ../../tasks/_assert-role-rejected.yml harness; nothing here
+# re-implements a rule, so the matrix cannot drift into agreeing with a
+# broken role.
 
 - name: Verify - every malformed vm_env_vars declaration is rejected
   hosts: all
@@ -194,7 +195,7 @@
           - "vm_env_vars_entries[1]"
   tasks:
     - name: Assert each malformed declaration is rejected
-      ansible.builtin.include_tasks: ../tasks/_assert-block-rejected.yml
+      ansible.builtin.include_tasks: ../../tasks/_assert-role-rejected.yml
       loop: "{{ vm_env_vars_cases }}"
       loop_control:
         loop_var: vm_env_vars_case
