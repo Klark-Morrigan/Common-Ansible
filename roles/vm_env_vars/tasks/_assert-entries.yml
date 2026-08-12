@@ -30,6 +30,14 @@
     vm_env_vars_entry_ctx: >-
       vm_env_vars_entries[{{ vm_env_vars_entry_index }}] on host
       '{{ inventory_hostname }}'
+    # Every loop below labels its iterations the same way, and by the same
+    # lazy per-iteration templating as the context prefix above. The entry
+    # itself is not a usable label - it may be any shape at all at this
+    # point, including the malformed ones these rules exist to reject - so
+    # the label is its position, which is also what every rejection message
+    # names.
+    vm_env_vars_entry_label: >-
+      vm_env_vars_entries[{{ vm_env_vars_entry_index }}]
   block:
     - name: Assert every declared environment entry is a mapping
       ansible.builtin.assert:
@@ -41,11 +49,7 @@
       loop: "{{ vm_env_vars_entries }}"
       loop_control:
         index_var: vm_env_vars_entry_index
-        # The entry itself is not a usable label - it may be any shape at
-        # all at this point, including the malformed ones these rules
-        # exist to reject - so the label is its position, which is also
-        # what every rejection message names.
-        label: "vm_env_vars_entries[{{ vm_env_vars_entry_index }}]"
+        label: "{{ vm_env_vars_entry_label }}"
 
     # Strict allow-list, matching every other field of the VM schema. A
     # silently-ignored sub-field is the failure mode this role must never
@@ -64,7 +68,7 @@
       loop: "{{ vm_env_vars_entries }}"
       loop_control:
         index_var: vm_env_vars_entry_index
-        label: "vm_env_vars_entries[{{ vm_env_vars_entry_index }}]"
+        label: "{{ vm_env_vars_entry_label }}"
 
     - name: Assert every declared environment entry has a name and a value
       ansible.builtin.assert:
@@ -77,7 +81,7 @@
       loop: "{{ vm_env_vars_entries }}"
       loop_control:
         index_var: vm_env_vars_entry_index
-        label: "vm_env_vars_entries[{{ vm_env_vars_entry_index }}]"
+        label: "{{ vm_env_vars_entry_label }}"
 
     # The '=' hint is in the message rather than in a rule of its own: the
     # regex already excludes it, and pasting a whole `KEY=VAL` assignment
@@ -94,7 +98,7 @@
       loop: "{{ vm_env_vars_entries }}"
       loop_control:
         index_var: vm_env_vars_entry_index
-        label: "vm_env_vars_entries[{{ vm_env_vars_entry_index }}]"
+        label: "{{ vm_env_vars_entry_label }}"
 
     # Empty is refused rather than written as NAME="", because the two
     # mean different things to a consumer testing the variable and only
@@ -111,7 +115,7 @@
       loop: "{{ vm_env_vars_entries }}"
       loop_control:
         index_var: vm_env_vars_entry_index
-        label: "vm_env_vars_entries[{{ vm_env_vars_entry_index }}]"
+        label: "{{ vm_env_vars_entry_label }}"
 
     - name: Assert no declared environment value breaks its own line
       ansible.builtin.assert:
@@ -129,7 +133,7 @@
       loop: "{{ vm_env_vars_entries }}"
       loop_control:
         index_var: vm_env_vars_entry_index
-        label: "vm_env_vars_entries[{{ vm_env_vars_entry_index }}]"
+        label: "{{ vm_env_vars_entry_label }}"
 
 # Outside the block because it is the one rule about the entries as a SET
 # rather than about any one of them, so it has no entry to name a context
