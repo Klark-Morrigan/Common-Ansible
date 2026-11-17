@@ -13,7 +13,8 @@
 ansible-core==2.18.18rc1
 
 # ansible-lint is the Ansible-domain CI gate, run from this venv rather
-# than a Docker image (see docs feature 20). Pinned here so the version
-# is single-sourced in the controller toolchain; 26.4.0 requires
+# than a Docker image (see the README's "Ansible lint gate"). Pinned
+# here so the version is single-sourced in the controller toolchain;
+# 26.4.0 requires
 # ansible-core>=2.16.14, so it resolves against the 2.18.1 pin above.
 ansible-lint==26.4.0
