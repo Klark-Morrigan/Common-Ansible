@@ -4,8 +4,8 @@
 # controller venv, reusing the exact helper and config resolution CI runs
 # - .github/actions/ansible-lint/ansible-lint.sh - so the local pre-push
 # bar cannot drift from CI's. Wired into run-lint-yaml-and-bash.sh so a
-# full local lint keeps covering ansible-lint once Common-Automation's
-# delegated runner drops its own step (feature 20 re-homes the gate here).
+# full local lint covers ansible-lint, which Common-Automation's delegated
+# runner does not run.
 #
 # Execution model: ansible-lint - and the bare `ansible-config` it shells
 # out to - live in the WSL controller venv ops/bootstrap-controller

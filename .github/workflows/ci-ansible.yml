@@ -1,16 +1,14 @@
 # Ansible-domain CI gate: runs ansible-lint against the caller repo's
-# Ansible content (playbooks, roles, ansible.cfg). This is the reusable
-# workflow the whole `Common-Ansible` feature 20 exists to create - the
-# ansible-lint gate that used to live in Common-Automation's universal
-# `ci-yaml.yml` now lives here, next to the controller venv that pins its
-# toolchain.
+# Ansible content (playbooks, roles, ansible.cfg). The gate lives here, not
+# in Common-Automation's universal `ci-yaml.yml`, so it sits next to the
+# controller venv that pins its toolchain.
 #
 # Execution model - a controller venv, not a Docker image. The old
 # Common-Automation gate built a Docker image per run; this one runs
 # `ansible-lint` straight from a controller venv on PATH. The lockfile is
-# the reproducibility boundary the image used to provide (see feature 20's
-# problem.md hermeticity note); the interpreter minor is pinned to complete
-# it.
+# the reproducibility boundary the image used to provide (see the README's
+# "Ansible lint gate" execution model); the interpreter minor is pinned to
+# complete it.
 #
 # WHERE that venv comes from is decided at runtime on `runner.environment`,
 # not on a runner label - a self-hosted *pool* is targeted by an arbitrary

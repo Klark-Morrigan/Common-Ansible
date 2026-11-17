@@ -1073,8 +1073,7 @@ gate built a Docker image per run; this one installs the exact
 `ansible-core` + `ansible-lint` closure into a `setup-python` interpreter
 and runs `ansible-lint` straight from PATH - no image, no version getter,
 no `retry.sh`. The lockfile is the reproducibility boundary the image used
-to provide, closed on two axes (see problem.md's
-[hermeticity trade-off](docs/dev/implementation/20-ansible-lint-ci-in-common-ansible/problem.md#the-hermeticity-trade-off-and-how-it-is-closed)):
+to provide, closed on two axes:
 
 - **Hash-locked closure.** [`requirements.txt`](requirements.txt) is a
   `pip-compile --generate-hashes` lockfile of the whole transitive closure,
