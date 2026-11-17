@@ -1001,7 +1001,7 @@ These shims assume `Common-PowerShell` and `Common-Automation` are sibling
 checkouts under the same parent directory. The same assumption now extends
 to the operator-side `ops/` bridge: `_run-playbook.sh` and
 `_stage-host-fileserver.sh` source the generic `_to_windows_path` helper
-from `Common-Automation/scripts/_to-windows-path.sh` (single source of
+from `Common-Automation/.github/lib/to-windows-path.sh` (single source of
 truth for the WSL->Windows path conversion that keeps `pwsh.exe -File`
 from exiting 64). They resolve it from the sibling checkout by default;
 `COMMON_AUTOMATION_ROOT` overrides the root, which the bats suites use to

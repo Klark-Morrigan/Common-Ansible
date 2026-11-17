@@ -132,7 +132,7 @@ export ANSIBLE_PIPELINING=True
 # Callback plugin search path (mirrors `callback_plugins` in ../ansible.cfg).
 # Holds timing_tree - the aggregate callback that records each task's duration
 # and writes the per-task rows the bash timing emitter (Common-Automation
-# scripts/timing.sh) grafts under the toolchain run's `run playbook` span, so
+# .github/lib/timing.sh) grafts under the toolchain run's `run playbook` span, so
 # the per-task breakdown lands in the same e2e-timing tree as the rest of the
 # flow. Exported always: a search path is inert until a callback is enabled.
 export ANSIBLE_CALLBACK_PLUGINS="${repo_root}/callback_plugins"

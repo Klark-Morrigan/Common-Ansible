@@ -35,7 +35,7 @@ _bats_resolve_bash() {
 }
 
 # Stand up a fake COMMON_AUTOMATION_ROOT containing the cross-repo shell
-# helpers ops/ scripts source at runtime - currently scripts/log.sh, the
+# helpers ops/ scripts source at runtime - currently .github/lib/log.sh, the
 # shared logger every ops/ script pulls in via the _log.sh resolver shim.
 # CI checks out no Common-Automation sibling (the bash workflow is the
 # reusable one FROM Common-Automation, run against this repo), so each bats
@@ -46,10 +46,10 @@ _bats_resolve_bash() {
 # hold against either.
 _bats_install_common_automation_stub() {
     local root="$1"
-    mkdir -p "${root}/scripts"
-    cat >"${root}/scripts/log.sh" <<'STUB'
+    mkdir -p "${root}/.github/lib"
+    cat >"${root}/.github/lib/log.sh" <<'STUB'
 #!/usr/bin/env bash
-# Test stub for Common-Automation/scripts/log.sh - the [ts] LEVEL <script>:
+# Test stub for Common-Automation/.github/lib/log.sh - the [ts] LEVEL <script>:
 # stderr format, minus colour, with no cross-repo colors.sh dependency.
 _log_emit() {
     local level="$1"

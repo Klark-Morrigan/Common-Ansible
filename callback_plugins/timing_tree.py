@@ -1,5 +1,5 @@
 # Aggregate callback that records each task's wall-clock duration and writes the
-# per-task rows the shared bash emitter (Common-Automation scripts/timing.sh,
+# per-task rows the shared bash emitter (Common-Automation .github/lib/timing.sh,
 # via its timing_graft_children_from verb) folds into the currently-open timing
 # span. It is the missing "inner" emitter for an ansible-playbook child: the bash
 # wrapper times the run as one `run playbook` span, and these rows deepen that
