@@ -8,8 +8,8 @@
 # The ansible-lint step is owned here, not by the delegated runner: the
 # Ansible gate lives in Common-Ansible and Common-Automation's runner does
 # not run ansible-lint, so this is what keeps roles/ linted on a local
-# pre-push run. The bats
-# test half is run-tests-bash.sh; run-ci-yaml-and-bash.sh runs both.
+# pre-push run. The bats test half is run-tests-bash.sh;
+# run-ci-yaml-and-bash.sh runs both.
 # Common-Automation is expected as a sibling checkout under the same
 # parent directory.
 set -euo pipefail

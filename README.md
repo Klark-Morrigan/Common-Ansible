@@ -47,7 +47,7 @@ was extended by the feature step that earned it.
 
 A fresh Windows host reaches the runnable state in one command:
 
-```
+```powershell
 pwsh ./ops/bootstrap-controller.ps1
 ```
 
@@ -57,7 +57,7 @@ from Explorer (thin launcher: invokes `pwsh` against the `.ps1` and
 holds the window open).
 
 The PowerShell stage installs `Common.PowerShell` and
-`Infrastructure.Secrets` from PSGallery (idempotent — `Invoke-ModuleInstall`
+`Infrastructure.Secrets` from PSGallery (idempotent - `Invoke-ModuleInstall`
 no-ops when current), ensures WSL2 is installed (delegating to
 `Assert-Wsl2Ready` from `Common.PowerShell`), verifies the default WSL
 distro actually has `bash` (delegating to `Assert-WslHasBash`), and
@@ -105,7 +105,7 @@ bootstrap will happen:
 - **Pre-install the three packages once**, then bootstrap is
   fully unattended:
 
-  ```
+  ```powershell
   wsl -d Ubuntu-24.04 -- sudo apt-get update
   wsl -d Ubuntu-24.04 -- sudo apt-get install -y python3 python3-venv jq
   ```
@@ -135,14 +135,14 @@ directory`.
 
 Diagnose:
 
-```
+```powershell
 wsl --list --verbose
 ```
 
 If the `*` (default) is on `docker-desktop`, that is the trap.
 Remediate by installing a real distro and pinning it as default:
 
-```
+```powershell
 wsl --install -d Ubuntu-24.04
 wsl --set-default Ubuntu-24.04
 ```
@@ -240,11 +240,11 @@ compose, the orchestrator itself) stay at the `ops/` root:
 - [`ops/_read-vault-config.sh`](ops/_read-vault-config.sh) - vault
   reader. Shells out to `pwsh.exe` to fetch a named secret via the
   `Infrastructure.Secrets` wrapper (`Get-InfrastructureSecret`, never
-  bare `Get-Secret` — single provider-swap point per problem.md),
+  bare `Get-Secret` - single provider-swap point per problem.md),
   strips CRLF + UTF-8 BOM, validates JSON, prints the payload on
   stdout. Only helper that talks to the Windows side.
-- [`ops/virtual-machines/_build-inventory.sh`](ops/virtual-machines/_build-inventory.sh)
-  - pure transform. Reads `vm_provisioner_config` on stdin and writes
+- [`ops/virtual-machines/_build-inventory.sh`](ops/virtual-machines/_build-inventory.sh) -
+  pure transform. Reads `vm_provisioner_config` on stdin and writes
   Ansible JSON inventory (group `vm_provisioner_hosts`, host key
   `vmName`) on stdout. Lives in the `ops/virtual-machines/` module with
   the rest of the VM-fleet code (see the note at the top of this
@@ -258,33 +258,33 @@ compose, the orchestrator itself) stay at the `ops/` root:
   helper by the `_build-extra-vars-<Name>.sh` convention, dispatches the
   vault's config to it, then merges the fragments via `jq -s add`.
   Inputs:
-  - `--provisioner-config <file>` (required) — the inventory the bridge
+  - `--provisioner-config <file>` (required) - the inventory the bridge
     read from the contract-declared vault. A flag name, not a vault
     name: the composer never learns which vault it came from.
-  - `--vault-config <Name>=<path>` (repeatable) — one per extra vault.
+  - `--vault-config <Name>=<path>` (repeatable) - one per extra vault.
     The Name derives the helper `_build-extra-vars-<Name>.sh`; a Name
     with no such helper is a contract typo or a domain with no helper
     yet and is rejected, never silently dropped.
-  - `--github-token <value>` — an optional cross-cutting input forwarded
+  - `--github-token <value>` - an optional cross-cutting input forwarded
     to every declared vault's helper when supplied (a helper that does
     not consume it never receives it). Requires at least one declared
     extra vault, since nothing consumes it otherwise; whether a given
     helper *requires* the token is that helper's own contract, not the
     composer's.
-  - `--host-base-url <url>` + `--runner-version <ver>` — the host file
+  - `--host-base-url <url>` + `--runner-version <ver>` - the host file
     server URL the listener bound to, plus the consumer-supplied artifact
     version. Forwarded the same way as the token; the pair arrives
     together or not at all, and requires a declared extra vault to have a
     consumer; partial or orphaned sets are rejected before any helper runs.
-  - `--consumer-root <path>` (optional) — when a consumer owns the
+  - `--consumer-root <path>` (optional) - when a consumer owns the
     per-domain fragment, resolve `_build-extra-vars-<Name>.sh` from
     `<path>/ops` instead of this composer's own directory. The inventory
     fragment is always substrate and is unaffected. Empty keeps every
     fragment on the composer's own `ops/` (the substrate's own flows).
   The always-on inventory helper owns its own validation and bats
   coverage:
-  - [`ops/virtual-machines/_build-extra-vars-inventory.sh`](ops/virtual-machines/_build-extra-vars-inventory.sh)
-    — emits `vm_provisioner_config`. Always-on; the inventory source
+  - [`ops/virtual-machines/_build-extra-vars-inventory.sh`](ops/virtual-machines/_build-extra-vars-inventory.sh) -
+    emits `vm_provisioner_config`. Always-on; the inventory source
     every payload domain shares.
   Every other payload fragment is consumer-owned: dispatch resolves
   `_build-extra-vars-<Name>.sh` from `<consumer-root>/ops`, so the
@@ -454,8 +454,8 @@ Each bash helper has its own bats suite under
 `_run-playbook.bats` stubs `pwsh.exe`, `ansible-playbook`, and the
 sibling bash helpers, then asserts orchestration only. The two
 host-file-server PowerShell helpers are covered by
-[`Tests/ops/Start-HostFileServer.Tests.ps1`](Tests/ops/Start-HostFileServer.Tests.ps1)
-- Pester rather than bats because each helper is single-file
+[`Tests/ops/Start-HostFileServer.Tests.ps1`](Tests/ops/Start-HostFileServer.Tests.ps1) -
+Pester rather than bats because each helper is single-file
 PowerShell calling `HttpListener` or `Get-NetIPAddress`; mocking
 those from bats would require a `pwsh.exe` round-trip per assertion.
 The end-to-end smoke against a real VM is captured in the feature plan.

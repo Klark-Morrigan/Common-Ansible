@@ -137,9 +137,9 @@ to pull it from, so the images must be built as part of the CI run.
 ## Why this belongs in Common-Ansible
 
 Molecule is Ansible-domain tooling and cannot be a tech-agnostic black
-box: it drags
-`ansible-core`, `molecule`, `molecule-plugins[docker]`, the pinned Galaxy
-collections, the role source under test, and the Docker driver. Placing
+box: it drags `ansible-core`, `molecule`, `molecule-plugins[docker]`, the
+pinned Galaxy collections, the role source under test, and the Docker
+driver. Placing
 it in Common-Automation would pull an entire language ecosystem into a
 repo whose charter is to carry none ("outside any single language
 ecosystem ... without dragging tooling along").

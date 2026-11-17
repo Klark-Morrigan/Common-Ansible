@@ -10,7 +10,7 @@
 - [Today's approach (feature 02 baseline)](#todays-approach-feature-02-baseline)
 - [What the plugin would look like](#what-the-plugin-would-look-like)
 - [Tradeoffs](#tradeoffs)
-- [Triggers — when to actually do this](#triggers--when-to-actually-do-this)
+- [Triggers - when to actually do this](#triggers---when-to-actually-do-this)
 - [Migration considerations](#migration-considerations)
 
 ---
@@ -29,15 +29,15 @@ than one consumer reads the inventory and that the source needs richer
 filtering than a `jq` pipeline can express comfortably. Neither is true
 in v1.
 
-Defer until one of the [triggers](#triggers--when-to-actually-do-this)
+Defer until one of the [triggers](#triggers---when-to-actually-do-this)
 fires.
 
 ## Today's approach (feature 02 baseline)
 
 The bridge writes two files in tmpfs each run:
 
-1. `extra-vars.json` — consumed via `--extra-vars @file`.
-2. `hosts.yml` — generated from the same vault JSON by a `jq` pipeline,
+1. `extra-vars.json` - consumed via `--extra-vars @file`.
+2. `hosts.yml` - generated from the same vault JSON by a `jq` pipeline,
    passed to `ansible-playbook` via `-i`.
 
 `hosts.yml` is a flat constructed inventory:
@@ -63,14 +63,14 @@ Both files are deleted by the bridge's `trap EXIT`.
 
 Three checked-in files replace the `jq` step in the bridge:
 
-```
+```text
 Common-Ansible/
-├── ansible.cfg                                # plugin discovery + default inventory
-├── inventory/
-│   ├── vm_provisioner.yml                     # plugin config (checked in)
-│   └── plugins/
-│       └── inventory/
-│           └── vm_provisioner.py              # the plugin
+|-- ansible.cfg                                # plugin discovery + default inventory
+|-- inventory/
+|   |-- vm_provisioner.yml                     # plugin config (checked in)
+|   `-- plugins/
+|       `-- inventory/
+|           `-- vm_provisioner.py              # the plugin
 ```
 
 ### `ansible.cfg`
@@ -135,7 +135,7 @@ class InventoryModule(BaseInventoryPlugin):
 ```
 
 The bridge then just exports `VM_ANSIBLE_VAULT_DATA="$tmpdir/vault_data.json"`
-and invokes `ansible-playbook` without `-i` — the plugin loads from the
+and invokes `ansible-playbook` without `-i` - the plugin loads from the
 checked-in config file.
 
 ## Tradeoffs
@@ -152,7 +152,7 @@ checked-in config file.
 | Stack trace on bad input | `jq` errors with a line number | Python exception inside Ansible |
 | Idiomatic Ansible | borderline | yes |
 
-## Triggers — when to actually do this
+## Triggers - when to actually do this
 
 Schedule this feature when **any one** of these is true:
 
@@ -178,7 +178,7 @@ inspectable.
 When this feature is scheduled:
 
 - The plugin's input contract is the same JSON the bridge already
-  writes — `data['vm_provisioner_config']` is the same array shape.
+  writes - `data['vm_provisioner_config']` is the same array shape.
   No vault changes; no schema changes for any consuming repo.
 - Roles and playbooks don't change. They only see hosts and variables,
   not where they came from. Verify in a test run with both inventories
@@ -187,10 +187,10 @@ When this feature is scheduled:
   `VM_ANSIBLE_VAULT_DATA` instead of writing `hosts.yml`. The bridge's
   `trap EXIT` cleanup still applies to `vault_data.json`.
 - The bridge no longer needs `yq` (if it was ever installed for the
-  YAML conversion) — JSON is the only intermediate format.
+  YAML conversion) - JSON is the only intermediate format.
 - Update `ops/_bootstrap-controller-wsl.sh` to include the plugin
   collection path on `ANSIBLE_INVENTORY_PLUGINS` if not already
   covered by `ansible.cfg`.
 - Ansible's `ansible-inventory --graph` against the plugin during
-  development is the fastest feedback loop — use it before wiring up
+  development is the fastest feedback loop - use it before wiring up
   the bridge.
