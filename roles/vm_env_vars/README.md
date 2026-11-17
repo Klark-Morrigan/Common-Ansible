@@ -84,8 +84,8 @@ The work is split across four files, by what each one protects:
 | [`tasks/_record-report.yml`](tasks/_record-report.yml) | Projecting what the reconcile did into the report |
 
 The entry rules are one task per rule rather than one include per entry,
-which is where the layout departs from `vm_files`. The schema here is flat
-- there is no second entry form to discriminate, which is the only thing
+which is where the layout departs from `vm_files`. The schema here is flat -
+there is no second entry form to discriminate, which is the only thing
 that earned that role its per-entry dispatcher. Ordering carries the
 dependencies instead: a task that dereferences a sub-field runs after the
 task that proved the sub-field is there.
@@ -232,8 +232,8 @@ that owns those units can answer.
 ## Tests
 
 `Tests/molecule/vm_env_vars/default` covers the block itself. Its
-`prepare.yml` seeds `/etc/environment` with content the role must not own
-- the distribution's `PATH`, a hand-added operator line, and **another
+`prepare.yml` seeds `/etc/environment` with content the role must not own -
+the distribution's `PATH`, a hand-added operator line, and **another
 consumer's managed block** - and seeds it `nobody:nogroup 0600`, so the
 verifier's `root:root 0644` assertion proves the policy is applied rather
 than merely inherited.

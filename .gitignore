@@ -14,7 +14,7 @@ vault-password*
 *.extra-vars.yml
 *.extra-vars.yaml
 
-# SSH key material — never committed. Inventory and roles reference keys by
+# SSH key material - never committed. Inventory and roles reference keys by
 # path, not by value.
 *.pem
 *.key
@@ -38,7 +38,7 @@ collections/ansible_collections/
 roles/external/
 .galaxy_install_info
 
-# Generated inventory — the PowerShell shim derives inventory from the
+# Generated inventory - the PowerShell shim derives inventory from the
 # VmProvisioner vault at runtime. The source of truth is the vault, not the
 # generated file.
 inventory/generated/

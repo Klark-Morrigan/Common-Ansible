@@ -68,7 +68,7 @@ PLAY
     # 'run playbook' span) and confirm the tree deepens - roleless Gathering Facts
     # as a leaf, the role's two tasks under a toolchain_demo node. This is the
     # proof the per-task data lands IN the timing report, not beside it.
-    timing_sh="$(cd "${REPO_ROOT}/../Common-Automation/scripts" && pwd)/timing.sh"
+    timing_sh="$(cd "${REPO_ROOT}/../Common-Automation/.github/lib" && pwd)/timing.sh"
     tree="${WORK}/tree.json"
     driver="${WORK}/flow.sh"
     {

@@ -5,11 +5,11 @@
 #      Automation's _run-lint-yaml-and-bash.sh, pointed at this repo via
 #      COMMON_AUTOMATION_TARGET_REPO.
 #   2. This repo's own venv-based ansible-lint (run-lint-ansible.sh).
-# The ansible-lint step is owned here, not by the delegated runner:
-# feature 20 re-homes the Ansible gate from Common-Automation into
-# Common-Ansible, so once Common-Automation drops its own ansible-lint
-# step this is what keeps roles/ linted on a local pre-push run. The bats
-# test half is run-tests-bash.sh; run-ci-yaml-and-bash.sh runs both.
+# The ansible-lint step is owned here, not by the delegated runner: the
+# Ansible gate lives in Common-Ansible and Common-Automation's runner does
+# not run ansible-lint, so this is what keeps roles/ linted on a local
+# pre-push run. The bats test half is run-tests-bash.sh;
+# run-ci-yaml-and-bash.sh runs both.
 # Common-Automation is expected as a sibling checkout under the same
 # parent directory.
 set -euo pipefail

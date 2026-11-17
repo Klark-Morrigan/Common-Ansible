@@ -533,8 +533,8 @@ Remove:
   fragment), `_require-gh-token.sh`, `_resolve-runner-version.ps1`,
   `_ensure-runner-tarball.ps1`;
 - the retained-fork path in
-  `ops/virtual-machines/_stage-host-fileserver.sh` (resolve-runner-version
-  + cache-the-tarball via the two `../` `.ps1`), making it serve-only -
+  `ops/virtual-machines/_stage-host-fileserver.sh` (resolve-runner-version +
+  cache-the-tarball via the two `../` `.ps1`), making it serve-only -
   the consumer always supplies `--staging-dir` + `--runner-version`; the
   matching fork fallback and the `--github-token` forward to the staging
   helper drop from `ops/_run-playbook.sh`;
@@ -1282,8 +1282,8 @@ elevation check, matching how `Reset-IcsSharing` is already gated.
   with no restart; unelevated -> no restart attempted.
 - **README:** Vm-Provisioner README - add the relay check to the pre-flight's
   documented check list. Correct the `Assert-HostNetworkPreflight` header while
-  there: it claims "Five host-side checks" and "Reads only - no Get-VM* /
-  Get-Net* mutations", but the function has grown to seven and does mutate via
+  there: it claims "Five host-side checks" and "Reads only - no `Get-VM*` /
+  `Get-Net*` mutations", but the function has grown to seven and does mutate via
   `Reset-IcsSharing` / `Set-NetConnectionProfile`.
 
 ```mermaid

@@ -1,10 +1,5 @@
-# CI for this repo's YAML and Ansible surfaces. Delegates to the
-# reusable workflow in Common-Automation, which runs four lint jobs in
-# parallel: actionlint, action-validator, yamllint, ansible-lint.
-# Each job auto-skips when its target surface is absent, so this
-# single one-line wiring serves every stage of the repo's growth -
-# from today's scaffold (no playbooks yet) through every later
-# feature.
+# CI for this repo's YAML surfaces, through Common-Automation's reusable
+# ci-yaml workflow; its header names the checks it runs.
 name: Common-Automation
 
 on:

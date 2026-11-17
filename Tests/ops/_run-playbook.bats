@@ -57,24 +57,24 @@ setup() {
     # sources (_log.sh for log_info/log_err, _to-windows-path.sh for
     # cleanup's pwsh path) plus their shared root resolver - copy the whole
     # folder so the transplanted script's `source ${script_dir}/imports/*`
-    # lookups resolve. The adapters load scripts/log.sh and
-    # scripts/_to-windows-path.sh from the COMMON_AUTOMATION_ROOT stub
+    # lookups resolve. The adapters load .github/lib/log.sh and
+    # .github/lib/to-windows-path.sh from the COMMON_AUTOMATION_ROOT stub
     # _bats_init_temp / this setup stand up.
     cp -r "${REPO_ROOT}/ops/imports"            "${TEST_REPO}/ops/"
     cp "${REPO_ROOT}/Tests/playbooks/_noop.yml" "${TEST_REPO}/playbooks/"
     chmod +x "${TEST_REPO}/ops/_run-playbook.sh"
 
-    # _to_windows_path now lives in Common-Automation, an external
+    # _to_windows_path lives in Common-Automation, an external
     # abstraction to this orchestrator, so it is mocked here (its real
-    # behavior is unit-tested in Common-Automation/scripts/_to-windows-path.bats).
+    # behavior is unit-tested in Common-Automation/.github/lib/to-windows-path.bats).
     # The stub goes in a fake COMMON_AUTOMATION_ROOT so the orchestrator's
     # sibling-source wiring is still exercised end to end - CI has no real
     # ../Common-Automation checkout for this repo, so the env override is
     # what keeps the source resolvable. The pwsh.exe stub ignores the path
     # it receives, so a passthrough is all cleanup() needs.
     export COMMON_AUTOMATION_ROOT="${TEST_TMP}/Common-Automation"
-    mkdir -p "${COMMON_AUTOMATION_ROOT}/scripts"
-    cat >"${COMMON_AUTOMATION_ROOT}/scripts/_to-windows-path.sh" <<'STUB'
+    mkdir -p "${COMMON_AUTOMATION_ROOT}/.github/lib"
+    cat >"${COMMON_AUTOMATION_ROOT}/.github/lib/to-windows-path.sh" <<'STUB'
 #!/usr/bin/env bash
 _to_windows_path() { printf '%s' "$1"; }
 STUB

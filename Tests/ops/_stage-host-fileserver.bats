@@ -98,16 +98,16 @@ STUB
     chmod +x "${STUBS}/pwsh.exe"
     export PATH="${STUBS}:${PATH}"
 
-    # _to_windows_path now lives in Common-Automation, an external
+    # _to_windows_path lives in Common-Automation, an external
     # abstraction to this helper, so it is mocked (real behavior is
-    # unit-tested in Common-Automation/scripts/_to-windows-path.bats). The
+    # unit-tested in Common-Automation/.github/lib/to-windows-path.bats). The
     # stub goes in a fake COMMON_AUTOMATION_ROOT so the helper's
     # sibling-source wiring is still exercised; CI has no real
     # ../Common-Automation checkout for this repo. The pwsh.exe stub keys
     # off the file basename on either separator, so passthrough suffices.
     export COMMON_AUTOMATION_ROOT="${TEST_TMP}/Common-Automation"
-    mkdir -p "${COMMON_AUTOMATION_ROOT}/scripts"
-    cat >"${COMMON_AUTOMATION_ROOT}/scripts/_to-windows-path.sh" <<'STUB'
+    mkdir -p "${COMMON_AUTOMATION_ROOT}/.github/lib"
+    cat >"${COMMON_AUTOMATION_ROOT}/.github/lib/to-windows-path.sh" <<'STUB'
 #!/usr/bin/env bash
 _to_windows_path() { printf '%s' "$1"; }
 STUB

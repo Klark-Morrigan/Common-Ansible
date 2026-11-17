@@ -132,8 +132,8 @@ fi
 #    --require-hashes turns the lock into an enforced contract: a drifted,
 #    unpinned, or unhashed line aborts the install loudly instead of
 #    silently floating, giving the venv the byte-for-byte reproducibility
-#    the Docker image it replaced used to provide (see docs feature 20's
-#    hermeticity note).
+#    the Docker image it replaced used to provide (see the README's
+#    "Ansible lint gate" execution model).
 # ---------------------------------------------------------------------------
 "${venv_dir}/bin/pip" install --upgrade pip >/dev/null
 "${venv_dir}/bin/pip" install --require-hashes -r requirements.txt
@@ -174,7 +174,7 @@ python_version="$("${venv_dir}/bin/python" --version)" || python_version="unknow
 ansible_version="$("${venv_dir}/bin/ansible" --version)" || ansible_version="unknown"
 ansible_version="${ansible_version%%$'\n'*}"
 # ansible-lint is now a co-equal pinned line in requirements.txt (it is
-# the venv-based CI/local gate - docs feature 20), so confirm it landed
+# the venv-based CI/local gate), so confirm it landed
 # alongside ansible rather than leaving it invisible in the summary. Its
 # first line already carries the version, so no head/parameter trim.
 ansible_lint_version="$("${venv_dir}/bin/ansible-lint" --version)" || ansible_lint_version="unknown"
